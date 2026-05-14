@@ -6,6 +6,7 @@ pydantic==2.6.0
 python-dotenv==1.0.1
 beautifulsoup4==4.12.3
 openai==1.51.2
+httpx==0.27.2
 yara-python==4.5.1
 volatility3==2.8.0
 pymongo==4.8.0

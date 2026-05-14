@@ -64,6 +64,31 @@ def _decrypt_secret(value: str) -> str:
         return value
 
 
+def _apply_runtime_provider_keys(doc: dict) -> None:
+    """
+    Keep scanner providers in sync with saved settings so backend analyzers
+    can use keys immediately without a restart.
+    """
+    mappings = {
+        "enc_virustotal_api_key": "VIRUSTOTAL_API_KEY",
+        "enc_abuseipdb_api_key": "ABUSEIPDB_API_KEY",
+        "enc_openai_api_key": "OPENAI_API_KEY",
+        "enc_urlscan_api_key": "URLSCAN_API_KEY",
+        "enc_phishtank_api_key": "PHISHTANK_API_KEY",
+    }
+    for enc_field, env_name in mappings.items():
+        decrypted = _decrypt_secret(str(doc.get(enc_field, ""))).strip()
+        if decrypted:
+            os.environ[env_name] = decrypted
+
+
+def _hydrate_runtime_keys_from_latest_settings() -> None:
+    latest = safe_list("app_settings", limit=1)
+    if not latest:
+        return
+    _apply_runtime_provider_keys(latest[0])
+
+
 @router.post("/analyze-file")
 async def analyze_file_endpoint(request: Request, file: UploadFile = File(...), _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
@@ -110,6 +135,7 @@ async def generate_report_endpoint(request: Request, file: UploadFile = File(...
 @router.post("/analyze-url")
 async def analyze_url_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
+    _hydrate_runtime_keys_from_latest_settings()
     try:
         result = analyze_url(payload.url)
         safe_insert(
@@ -130,6 +156,7 @@ async def analyze_url_endpoint(request: Request, payload: UrlAnalysisRequest, _:
 @router.post("/generate-url-report")
 async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
+    _hydrate_runtime_keys_from_latest_settings()
     analysis = analyze_url(payload.url).model_dump()
     safe_insert(
         "reports",
@@ -148,6 +175,7 @@ async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisReq
 @router.post("/generate-log-report")
 async def generate_log_report_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
+    _hydrate_runtime_keys_from_latest_settings()
     analysis = analyze_log_text(payload.log_text)
     safe_insert(
         "reports",
@@ -165,6 +193,7 @@ async def generate_log_report_endpoint(request: Request, payload: LogAnalysisReq
 @router.post("/analyze-log")
 async def analyze_log_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
+    _hydrate_runtime_keys_from_latest_settings()
     result = analyze_log_text(payload.log_text)
     safe_insert(
         "log_scans",
@@ -337,6 +366,7 @@ async def save_api_keys_endpoint(payload: ApiKeysUpdateRequest, _: None = Depend
         **encrypted_doc,
         "enc_version": 1,
     }
+    _apply_runtime_provider_keys(doc)
     saved = safe_insert("app_settings", doc)
     return {"saved": bool(saved.get("saved")), "id": saved.get("id")}
 

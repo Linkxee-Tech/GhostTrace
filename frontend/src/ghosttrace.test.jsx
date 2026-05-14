@@ -1,3 +1,4 @@
+import React from "react";
 import { render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -6,7 +7,7 @@ import GhostTraceApp from "./GhostTrace.jsx";
 describe("GhostTraceApp", () => {
   it("renders the main title", () => {
     render(<GhostTraceApp />);
-    expect(screen.getByText(/GhostTrace/i)).toBeTruthy();
+    expect(screen.getAllByText(/GhostTrace/i).length).toBeGreaterThan(0);
   });
 
   it("contains scanner endpoint wiring in source", () => {
@@ -22,6 +23,6 @@ describe("GhostTraceApp", () => {
   it("keeps fallback/static paths for non-connected pages visible", () => {
     const src = readFileSync(resolve(process.cwd(), "src/GhostTrace.jsx"), "utf8");
     expect(src).toContain("const HISTORY = [");
-    expect(src).toContain("function Reports({ reportsData = null })");
+    expect(src).toContain("function Reports({ reportsData = null, setView })");
   });
 });

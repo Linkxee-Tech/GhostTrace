@@ -1,11 +1,33 @@
 import re
 import os
+import time
 from typing import Any
 
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
     OpenAI = None
+
+def _openai_generate_text(client, model: str, prompt: str, max_tokens: int = 220) -> str:
+    if hasattr(client, "responses"):
+        resp = client.responses.create(model=model, input=prompt, max_output_tokens=max_tokens)
+        return (getattr(resp, "output_text", "") or "").strip()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+    )
+    return ((resp.choices[0].message.content if resp and resp.choices else "") or "").strip()
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    if "ratelimit" in name:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    return "429" in str(exc)
 
 
 def _generate_log_ai_explanation(text: str, behavior_patterns: list[str], risk_score: int) -> str:
@@ -24,8 +46,34 @@ def _generate_log_ai_explanation(text: str, behavior_patterns: list[str], risk_s
             f"Log excerpt:\n{text[:3500]}\n"
             "Provide 4-6 concise evidence-based sentences and immediate defensive actions."
         )
-        resp = client.responses.create(model="gpt-4.1-mini", input=prompt, max_output_tokens=220)
-        return (resp.output_text or "").strip() or "AI explanation returned empty output."
+        models = [os.getenv("OPENAI_MODEL", "").strip() or "gpt-4.1-mini", "gpt-4o-mini"]
+        seen = set()
+        last_exc: Exception | None = None
+        for model in models:
+            if model in seen:
+                continue
+            seen.add(model)
+            for attempt in range(3):
+                try:
+                    text_out = _openai_generate_text(client, model, prompt, max_tokens=220)
+                    if text_out:
+                        return text_out
+                except Exception as exc:
+                    last_exc = exc
+                    if _is_rate_limited(exc) and attempt < 2:
+                        time.sleep(1.2 * (attempt + 1))
+                        continue
+                    break
+        reason = f" ({type(last_exc).__name__})" if last_exc else ""
+        if last_exc and _is_rate_limited(last_exc):
+            return (
+                "AI explanation service is temporarily rate-limited. "
+                "Deterministic behavioral findings are provided; retry shortly."
+            )
+        return (
+            "AI explanation service could not be reached"
+            f"{reason}. Deterministic behavioral findings are provided."
+        )
     except Exception:
         return (
             "AI explanation service could not be reached. Deterministic behavioral findings are provided."

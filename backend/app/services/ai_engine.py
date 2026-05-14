@@ -1,10 +1,32 @@
 from typing import List
 import os
+import time
 
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
     OpenAI = None
+
+def _openai_generate_text(client, model: str, prompt: str, max_tokens: int = 220) -> str:
+    if hasattr(client, "responses"):
+        resp = client.responses.create(model=model, input=prompt, max_output_tokens=max_tokens)
+        return (getattr(resp, "output_text", "") or "").strip()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+    )
+    return ((resp.choices[0].message.content if resp and resp.choices else "") or "").strip()
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    if "ratelimit" in name:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    return "429" in str(exc)
 
 
 def explain_behavior(filename: str, file_type: str, suspicious_strings: List[str], iocs: dict) -> str:
@@ -40,7 +62,22 @@ def explain_behavior(filename: str, file_type: str, suspicious_strings: List[str
             f"IOCs: {iocs}\n"
             "Respond in 4-6 professional sentences."
         )
-        resp = client.responses.create(model="gpt-4.1-mini", input=prompt, max_output_tokens=220)
-        return (resp.output_text or "").strip() or deterministic_summary
+        models = [os.getenv("OPENAI_MODEL", "").strip() or "gpt-4.1-mini", "gpt-4o-mini"]
+        seen = set()
+        for model in models:
+            if model in seen:
+                continue
+            seen.add(model)
+            for attempt in range(3):
+                try:
+                    text = _openai_generate_text(client, model, prompt, max_tokens=220)
+                    if text:
+                        return text
+                except Exception as exc:
+                    if _is_rate_limited(exc) and attempt < 2:
+                        time.sleep(1.2 * (attempt + 1))
+                        continue
+                    break
+        return deterministic_summary
     except Exception:
         return deterministic_summary

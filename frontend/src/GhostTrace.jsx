@@ -1,4 +1,4 @@
-// ═══════════════════════════════════════════════════════════════════════════════
+﻿// ═══════════════════════════════════════════════════════════════════════════════
 //  GhostTrace v2.0 — AI-Powered Malware, Threat Intelligence & Website Security
 //  Complete Frontend  |  React SPA  |  10 Pages  |  All Features Implemented
 //  Pages: Dashboard · Scan History · File Scanner · URL Scanner · Log Analyzer
@@ -649,6 +649,22 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+function openBlobInNewTab(blob) {
+  const url = URL.createObjectURL(blob);
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  if (!win) {
+    // Fallback if popup is blocked: trigger download instead of no-op.
+    downloadBlob(blob, "ghosttrace_report.pdf");
+  } else {
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+}
+
+function downloadJson(data, filename) {
+  const blob = new Blob([JSON.stringify(data ?? {}, null, 2)], { type: "application/json" });
+  downloadBlob(blob, filename);
+}
+
 function normalizeLevel(value) {
   const v = String(value || "").toLowerCase();
   if (["critical", "high", "medium", "low", "clean"].includes(v)) return v;
@@ -1005,16 +1021,51 @@ function useScan(steps) {
 // PAGE: DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function Dashboard({ setView }) {
+function Dashboard({ setView, historyItems = HISTORY, reportsData = null, backendStatus = {} }) {
   const lvlBg = { critical:"rgba(255,45,85,.1)", high:"rgba(255,170,0,.1)", medium:"rgba(59,130,246,.1)", low:"rgba(0,255,136,.08)", clean:"rgba(0,255,136,.08)" };
   const typeIcon = { file:"📁", url:"🌐", log:"📋", ioc:"🔗" };
+  const totalScans = historyItems.length;
+  const threatCount = historyItems.filter((s) => ["critical", "high", "medium"].includes(String(s.level))).length;
+  const iocCount = historyItems.reduce((n, s) => n + Number(s.iocs || 0), 0);
+  const reportCount = Array.isArray(reportsData) ? reportsData.length : 0;
+  const recent = historyItems.slice(0, 6);
+  const byLevel = {
+    critical: historyItems.filter((s) => String(s.level) === "critical").length,
+    high: historyItems.filter((s) => String(s.level) === "high").length,
+    medium: historyItems.filter((s) => String(s.level) === "medium").length,
+    lowClean: historyItems.filter((s) => ["low", "clean"].includes(String(s.level))).length,
+  };
+  const pct = (v) => totalScans ? Math.round((Number(v || 0) / totalScans) * 100) : 0;
+  const threatRows = [
+    { l:"Critical", n:byLevel.critical, c:"var(--red)", p:pct(byLevel.critical), pb:"red" },
+    { l:"High", n:byLevel.high, c:"var(--amber)", p:pct(byLevel.high), pb:"amber" },
+    { l:"Medium", n:byLevel.medium, c:"var(--blue)", p:pct(byLevel.medium), pb:"blue" },
+    { l:"Low / Clean", n:byLevel.lowClean, c:"var(--green)", p:pct(byLevel.lowClean), pb:"green" },
+  ];
+  const liveFeed = (backendStatus?.alerts || []).slice(0, 6).map((a) => [
+    a?.url || "monitor-item",
+    "Domain",
+    a?.message || "Elevated risk from monitor check",
+    "Monitor",
+    Math.min(99, Number(a?.risk_score || 50)),
+    normalizeLevel(a?.threat_level || "medium"),
+  ]);
+  const historyFeed = recent.map((s) => [
+    s.name || "scan-item",
+    String(s.type || "scan").toUpperCase(),
+    `${String(s.level || "unknown").toUpperCase()} risk scan`,
+    "GhostTrace",
+    Math.min(99, Number(s.risk || 0)),
+    normalizeLevel(s.level || "medium"),
+  ]);
+  const feedRows = liveFeed.length ? liveFeed : historyFeed;
   return (
     <div className="view">
       <div className="stat-grid">
-        <div className="stat c-cyan"><div className="stat-val" style={{color:"var(--cyan)"}}>247</div><div className="stat-lbl">Total Scans</div><div className="stat-sub">↑ 12 this week</div></div>
-        <div className="stat c-red"><div className="stat-val" style={{color:"var(--red)"}}>38</div><div className="stat-lbl">Threats Detected</div><div className="stat-sub">15.4% detection rate</div></div>
-        <div className="stat c-amber"><div className="stat-val" style={{color:"var(--amber)"}}>1,204</div><div className="stat-lbl">IOCs Extracted</div><div className="stat-sub">IPs, domains, hashes</div></div>
-        <div className="stat c-green"><div className="stat-val" style={{color:"var(--green)"}}>62</div><div className="stat-lbl">Reports Generated</div><div className="stat-sub">PDF forensic reports</div></div>
+        <div className="stat c-cyan"><div className="stat-val" style={{color:"var(--cyan)"}}>{totalScans}</div><div className="stat-lbl">Total Scans</div><div className="stat-sub">Loaded from backend history</div></div>
+        <div className="stat c-red"><div className="stat-val" style={{color:"var(--red)"}}>{threatCount}</div><div className="stat-lbl">Threats Detected</div><div className="stat-sub">{totalScans ? `${Math.round((threatCount / totalScans) * 100)}% detection rate` : "No scans yet"}</div></div>
+        <div className="stat c-amber"><div className="stat-val" style={{color:"var(--amber)"}}>{iocCount}</div><div className="stat-lbl">IOCs Extracted</div><div className="stat-sub">IPs, domains, hashes</div></div>
+        <div className="stat c-green"><div className="stat-val" style={{color:"var(--green)"}}>{reportCount}</div><div className="stat-lbl">Reports Generated</div><div className="stat-sub">PDF forensic reports</div></div>
       </div>
 
       <div className="g2 mb20">
@@ -1024,7 +1075,7 @@ function Dashboard({ setView }) {
             <button className="btn btn-ghost btn-sm" onClick={() => setView("history")}>All scans →</button>
           </div>
           <div className="card-body">
-            {HISTORY.slice(0, 6).map((s, i) => (
+            {recent.map((s, i) => (
               <div key={i} className="act-item">
                 <div className="act-icon-box" style={{ background: lvlBg[s.level] || lvlBg.low }}>{typeIcon[s.type]}</div>
                 <div className="f1" style={{ minWidth: 0 }}>
@@ -1041,7 +1092,7 @@ function Dashboard({ setView }) {
           <div className="card">
             <div className="card-hd"><span className="card-title">📊 Threat Breakdown</span></div>
             <div className="card-body">
-              {[{l:"Critical",n:8,c:"var(--red)",p:21,pb:"red"},{l:"High",n:14,c:"var(--amber)",p:37,pb:"amber"},{l:"Medium",n:11,c:"var(--blue)",p:29,pb:"blue"},{l:"Low / Clean",n:5,c:"var(--green)",p:13,pb:"green"}].map(r => (
+              {threatRows.map(r => (
                 <div key={r.l} className="mb12">
                   <div className="fjsb mb6 mono txt-xs"><span style={{color:r.c}}>{r.l}</span><span className="txt-muted">{r.n} scans</span></div>
                   <Pbar val={r.p} color={r.pb} />
@@ -1065,20 +1116,13 @@ function Dashboard({ setView }) {
       <div className="card">
         <div className="card-hd">
           <span className="card-title">🌍 Live Threat Intelligence Feed</span>
-          <span className="fac gap6 mono txt-xs txt-muted"><span className="live-dot" />LIVE · Updated 5 min ago</span>
+          <span className="fac gap6 mono txt-xs txt-muted"><span className="live-dot" />{liveFeed.length ? "LIVE · Updated from monitor alerts" : "LIVE · Derived from latest backend scan history"}</span>
         </div>
         <div style={{ padding: 0 }}>
           <table className="tbl">
             <thead><tr><th>Indicator</th><th>Type</th><th>Malware / Threat</th><th>Source</th><th>Confidence</th><th>Status</th></tr></thead>
             <tbody>
-              {[
-                ["185.220.101.47","IP","Emotet C2","AbuseIPDB",94,"critical"],
-                ["secure-paypa1.com","Domain","PayPal Phishing","PhishTank",98,"critical"],
-                ["a1b2c3d4e5f6…","MD5","Emotet Dropper","VirusTotal",87,"critical"],
-                ["malware-cdn.ru","Domain","Malware CDN","URLScan",76,"high"],
-                ["45.142.212.100","IP","LockBit 3.0 C2","ThreatFox",91,"critical"],
-                ["update-flash.xyz","Domain","Fake Flash Updater","ESET",83,"high"],
-              ].map(([ioc, type, threat, src, conf, level], i) => (
+              {feedRows.map(([ioc, type, threat, src, conf, level], i) => (
                 <tr key={i}>
                   <td><span className="hash-pill">{ioc}</span></td>
                   <td><Badge level={type === "IP" ? "info" : "purple"}>{type}</Badge></td>
@@ -1113,6 +1157,27 @@ function ScanHistory({ setView, historyItems = HISTORY }) {
     const mL = fLevel === "all" || s.level === fLevel;
     return mQ && mT && mL;
   }), [q, fType, fLevel, historyItems]);
+
+  const onView = (s) => {
+    if (s.type === "file") setView("file-scan");
+    else if (s.type === "url") setView("url-scan");
+    else if (s.type === "log") setView("log-scan");
+    else setView("ioc");
+  };
+  const onPdf = async (s) => {
+    try {
+      if (s.type === "url" && /^https?:\/\//i.test(String(s.name || ""))) {
+        const blob = await apiBlob("/api/generate-url-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: s.name }),
+        });
+        downloadBlob(blob, "ghosttrace_url_report.pdf");
+        return;
+      }
+      downloadJson(s, `ghosttrace_history_${s.type}_${String(s.id || "item")}.json`);
+    } catch (e) { reportClientError("History report action failed", e); }
+  };
 
   return (
     <div className="view">
@@ -1178,8 +1243,8 @@ function ScanHistory({ setView, historyItems = HISTORY }) {
                   <td className="mono txt-xs txt-muted tbl-nowrap">{s.date}</td>
                   <td>
                     <div className="fac gap6">
-                      <button className="btn btn-ghost btn-sm">View</button>
-                      <button className="btn btn-ghost btn-sm">⬇ PDF</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => onView(s)}>View</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => onPdf(s)}>⬇ PDF</button>
                     </div>
                   </td>
                 </tr>
@@ -1304,7 +1369,7 @@ function FileScanner() {
             </div>
             <div className="fac gap8">
               <button className="btn btn-ghost" onClick={resetAll}>↩ New Scan</button>
-              <button className="btn btn-sec">📄 View Report</button>
+              <button className="btn btn-sec" onClick={async () => { if (!selectedFile) return; try { const fd = new FormData(); fd.append("file", selectedFile); const blob = await apiBlob("/api/generate-report", { method: "POST", body: fd }); openBlobInNewTab(blob); } catch (e) { reportClientError("File report view failed", e); } }}>📄 View Report</button>
               <button className="btn btn-primary" onClick={async () => { if (!selectedFile) return; try { const fd = new FormData(); fd.append("file", selectedFile); const blob = await apiBlob("/api/generate-report", { method: "POST", body: fd }); downloadBlob(blob, `ghosttrace_report_${selectedFile.name}.pdf`); } catch (e) { reportClientError("File report download failed", e); } }}>⬇ Download PDF</button>
             </div>
           </div>
@@ -1420,7 +1485,7 @@ function FileScanner() {
 
           {tab === "iocs" && (
             <div className="card">
-              <div className="card-hd"><span className="card-title">🔗 Extracted IOCs</span><button className="btn btn-ghost btn-sm">⬇ Export JSON</button></div>
+              <div className="card-hd"><span className="card-title">🔗 Extracted IOCs</span><button className="btn btn-ghost btn-sm" onClick={() => downloadJson(r.iocs, "ghosttrace_file_iocs.json")}>⬇ Export JSON</button></div>
               <div className="card-body"><IOCPanel iocs={r.iocs} /></div>
             </div>
           )}
@@ -1554,7 +1619,7 @@ function URLScanner() {
             </div>
             <div className="fac gap8">
               <button className="btn btn-ghost" onClick={resetAll}>↩ New Scan</button>
-              <button className="btn btn-sec">📄 Report</button>
+              <button className="btn btn-sec" onClick={async () => { try { const blob = await apiBlob("/api/generate-url-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url }) }); openBlobInNewTab(blob); } catch (e) { reportClientError("URL report view failed", e); } }}>📄 Report</button>
               <button className="btn btn-primary" onClick={async () => { try { const blob = await apiBlob("/api/generate-url-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url }) }); downloadBlob(blob, "ghosttrace_url_report.pdf"); } catch (e) { reportClientError("URL report download failed", e); } }}>⬇ PDF</button>
             </div>
           </div>
@@ -1775,7 +1840,7 @@ function URLScanner() {
 
           {tab === "iocs" && (
             <div className="card">
-              <div className="card-hd"><span className="card-title">🔗 Extracted IOCs</span><button className="btn btn-ghost btn-sm">⬇ Export JSON</button></div>
+              <div className="card-hd"><span className="card-title">🔗 Extracted IOCs</span><button className="btn btn-ghost btn-sm" onClick={() => downloadJson(r.iocs, "ghosttrace_url_iocs.json")}>⬇ Export JSON</button></div>
               <div className="card-body"><IOCPanel iocs={r.iocs} /></div>
             </div>
           )}
@@ -1904,7 +1969,7 @@ function LogAnalyzer() {
 
           {tab === "iocs" && (
             <div className="card">
-              <div className="card-hd"><span className="card-title">🔗 IOCs Extracted from Logs</span><button className="btn btn-ghost btn-sm">⬇ Export JSON</button></div>
+              <div className="card-hd"><span className="card-title">🔗 IOCs Extracted from Logs</span><button className="btn btn-ghost btn-sm" onClick={() => downloadJson(r.iocs, "ghosttrace_log_iocs.json")}>⬇ Export JSON</button></div>
               <div className="card-body"><IOCPanel iocs={r.iocs} /></div>
             </div>
           )}
@@ -2046,9 +2111,47 @@ function IOCExtractor() {
 // PAGE: ATTACK TIMELINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function AttackTimeline() {
+function AttackTimeline({ historyItems = HISTORY, backendStatus = {} }) {
   const [expanded, setExpanded] = useState(null);
-  const chain = ATTACK_CHAIN;
+  const top = historyItems[0];
+  const dynamicPhases = (backendStatus?.alerts || []).slice(0, 8).map((a, i) => ({
+    phase: `Monitor Event ${i + 1}`,
+    tactic: "MONITOR",
+    technique: String(a?.threat_level || "medium").toUpperCase(),
+    detail: `${a?.message || "Elevated risk detected"} (${a?.url || "watchlist item"})`,
+    sev: normalizeLevel(a?.threat_level || "medium"),
+    icon: "📡",
+  }));
+  const scanDerivedPhases = historyItems.slice(0, 8).map((h, i) => {
+    const t = String(h?.type || "").toLowerCase();
+    const level = normalizeLevel(h?.level || "medium");
+    const isUrl = t === "url";
+    const isFile = t === "file";
+    const isLog = t === "log";
+    return {
+      phase: isUrl ? `URL Recon Event ${i + 1}` : isFile ? `File Malware Event ${i + 1}` : isLog ? `Log Forensics Event ${i + 1}` : `Investigation Event ${i + 1}`,
+      tactic: isUrl ? "RECON" : isFile ? "EXECUTION" : isLog ? "DETECTION" : "INVESTIGATION",
+      technique: `${String(h?.type || "scan").toUpperCase()} · ${String(level).toUpperCase()}`,
+      detail: `${h?.name || "scan target"} · risk ${Number(h?.risk || 0)}/100 · findings ${Number(h?.findings || 0)} · iocs ${Number(h?.iocs || 0)}`,
+      sev: level,
+      icon: isUrl ? "🌐" : isFile ? "📁" : isLog ? "📋" : "🕵",
+    };
+  });
+  const chain = dynamicPhases.length ? {
+    name: "Live Monitor Attack Chain",
+    target: `${dynamicPhases.length} monitor alerts`,
+    risk: Math.min(99, Math.round(dynamicPhases.reduce((n, p) => n + (p.sev === "critical" ? 20 : p.sev === "high" ? 15 : 8), 0) / Math.max(dynamicPhases.length, 1))),
+    level: "HIGH",
+    phases: dynamicPhases,
+    iocs: { ips: [], domains: (backendStatus?.alerts || []).map((a) => a?.url).filter(Boolean), urls: [], emails: [], hashes: [], reg_keys: [], commands: [], cves: [] },
+  } : scanDerivedPhases.length ? {
+    name: `Recent Scan Chain${top?.name ? ` — ${top.name}` : ""}`,
+    target: `${scanDerivedPhases.length} backend scans`,
+    risk: Math.min(99, Math.round(scanDerivedPhases.reduce((n, p) => n + (p.sev === "critical" ? 20 : p.sev === "high" ? 15 : p.sev === "medium" ? 10 : 5), 0) / Math.max(scanDerivedPhases.length, 1))),
+    level: String(top?.level || "medium").toUpperCase(),
+    phases: scanDerivedPhases,
+    iocs: { ips: [], domains: historyItems.filter((h) => h.type === "url").map((h) => h.name).slice(0, 20), urls: [], emails: [], hashes: [], reg_keys: [], commands: [], cves: [] },
+  } : ATTACK_CHAIN;
   const sevColor = { critical:"var(--red)", high:"var(--amber)", medium:"var(--blue)", low:"var(--green)" };
 
   return (
@@ -2113,7 +2216,7 @@ function AttackTimeline() {
                 ["C2","T1071.001","HTTP Protocol"],
                 ["Credential Access","T1555.003","Browser Credentials"],
                 ["Lateral Movement","T1078","Valid Credentials"],
-              ].map(([tactic, id, name], i) => (
+              ].slice(0, Math.max(4, Math.min(chain.phases.length, 8))).map(([tactic, id, name], i) => (
                 <div key={i} className="ck-row">
                   <div className="ck-lbl" style={{ fontSize:11 }}>{tactic}</div>
                   <div className="fac gap6"><span className="mitre">{id}</span><span className="mono txt-xs txt-muted">{name}</span></div>
@@ -2157,7 +2260,54 @@ function AttackTimeline() {
 // PAGE: THREAT INTELLIGENCE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function ThreatIntel() {
+function ThreatIntel({ backendStatus = {}, historyItems = HISTORY }) {
+  const liveRows = (backendStatus?.alerts || []).slice(0, 10).map((a) => [
+    a?.url || "watchlist-item",
+    "Domain",
+    a?.message || "Monitor alert",
+    a?.timestamp ? new Date(a.timestamp).toLocaleDateString() : "-",
+    "Monitor",
+    Math.min(99, Number(a?.risk_score || 50)),
+    normalizeLevel(a?.threat_level || "medium"),
+  ]);
+  const historyRows = historyItems.slice(0, 10).map((h) => [
+    h?.name || "scan-target",
+    String(h?.type || "scan").toUpperCase(),
+    `${String(h?.level || "unknown").toUpperCase()} scan`,
+    h?.date || "-",
+    "GhostTrace",
+    Math.min(99, Number(h?.risk || 0)),
+    normalizeLevel(h?.level || "medium"),
+  ]);
+  const familyCounts = {};
+  (backendStatus?.alerts || []).forEach((a) => {
+    const k = String(a?.threat_level || "unknown").toUpperCase();
+    familyCounts[k] = (familyCounts[k] || 0) + 1;
+  });
+  const liveFamilies = Object.entries(familyCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({
+      n: `${name} monitor alerts`,
+      c: count,
+      p: Math.min(100, count * 20),
+      pb: name === "CRITICAL" ? "red" : name === "HIGH" ? "amber" : "blue",
+    }));
+
+  const originRows = (() => {
+    const alerts = backendStatus?.alerts || [];
+    if (!alerts.length) return [];
+    const byHost = {};
+    alerts.forEach((a) => {
+      const raw = String(a?.url || "").trim();
+      let host = raw;
+      try { host = new URL(raw).hostname || raw; } catch {}
+      if (!host) host = "unknown";
+      byHost[host] = (byHost[host] || 0) + 1;
+    });
+    const total = Object.values(byHost).reduce((n, v) => n + v, 0) || 1;
+    return Object.entries(byHost).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([host, cnt]) => [host, String(cnt), `${Math.round((cnt / total) * 100)}%`]);
+  })();
   return (
     <div className="view">
       <div className="mb20">
@@ -2166,20 +2316,20 @@ function ThreatIntel() {
       </div>
 
       <div className="g3 mb16">
-        {[{name:"VirusTotal",   e:"🔬", checks:"24,892", status:"Connected"},
-          {name:"PhishTank",    e:"🎣", checks:"1,204",  status:"Connected"},
-          {name:"AbuseIPDB",    e:"📡", checks:"892",    status:"Connected"},
-          {name:"URLScan.io",   e:"🔍", checks:"341",    status:"Connected"},
-          {name:"ThreatFox",    e:"🦊", checks:"88",     status:"Connected"},
-          {name:"YARA Engine",  e:"🛡", checks:"10,204 rules", status:"Active"},
+        {[{name:"VirusTotal",   e:"🔬", checks:"live provider", status:backendStatus?.providers?.virustotal ? "Connected" : "Missing key", on:Boolean(backendStatus?.providers?.virustotal)},
+          {name:"PhishTank",    e:"🎣", checks:"live provider", status:backendStatus?.providers?.phishtank ? "Connected" : "Missing key", on:Boolean(backendStatus?.providers?.phishtank)},
+          {name:"AbuseIPDB",    e:"📡", checks:"live provider", status:backendStatus?.providers?.abuseipdb ? "Connected" : "Missing key", on:Boolean(backendStatus?.providers?.abuseipdb)},
+          {name:"URLScan.io",   e:"🔍", checks:"live provider", status:backendStatus?.providers?.urlscan ? "Connected" : "Missing key", on:Boolean(backendStatus?.providers?.urlscan)},
+          {name:"ThreatFox",    e:"🦊", checks:"optional feed", status:"Optional", on:false},
+          {name:"YARA Engine",  e:"🛡", checks:"backend runtime", status:backendStatus?.yara ? "Active" : "Unavailable", on:Boolean(backendStatus?.yara)},
         ].map(f => (
           <div key={f.name} className="card" style={{ padding:"15px" }}>
             <div className="fjsb mb8">
               <div className="fac gap8"><span style={{fontSize:18}}>{f.e}</span><span style={{fontWeight:700,fontSize:13}}>{f.name}</span></div>
-              <Badge level="clean">{f.status}</Badge>
+              <Badge level={f.on ? "clean" : "medium"}>{f.status}</Badge>
             </div>
             <div className="mono txt-xs txt-muted mb8">{f.checks} lookups</div>
-            <Pbar val={100} color="green" />
+            <Pbar val={f.on ? 100 : 35} color={f.on ? "green" : "amber"} />
           </div>
         ))}
       </div>
@@ -2187,20 +2337,13 @@ function ThreatIntel() {
       <div className="card mb16">
         <div className="card-hd">
           <span className="card-title">🔥 Live Threat Feed</span>
-          <span className="fac gap6 mono txt-xs txt-muted"><span className="live-dot" />Updated 5 min ago</span>
+          <span className="fac gap6 mono txt-xs txt-muted"><span className="live-dot" />{liveRows.length ? "Updated from monitor alerts" : "Updated from backend scan history"}</span>
         </div>
         <div style={{ padding:0 }}>
           <table className="tbl">
             <thead><tr><th>Indicator</th><th>Type</th><th>Malware Family</th><th>First Seen</th><th>Source</th><th>Confidence</th><th>Status</th></tr></thead>
             <tbody>
-              {[["185.220.101.47","IP","Emotet C2","2024-11-28","AbuseIPDB",94,"critical"],
-                ["secure-paypa1.com","Domain","PayPal Phishing","2024-11-30","PhishTank",98,"critical"],
-                ["a1b2c3d4e5f6…","MD5","Emotet Dropper","2024-11-25","VirusTotal",87,"critical"],
-                ["malware-cdn.ru","Domain","Malware CDN","2024-11-20","URLScan",76,"high"],
-                ["45.142.212.100","IP","LockBit 3.0 C2","2024-11-18","ThreatFox",91,"critical"],
-                ["update-flash.xyz","Domain","Fake Flash Updater","2024-11-15","ESET",83,"high"],
-                ["hacker@evil.ru","Email","Spearphishing Actor","2024-11-14","Internal",72,"high"],
-              ].map(([ioc, type, fam, date, src, conf, level], i) => (
+              {(liveRows.length ? liveRows : historyRows).map(([ioc, type, fam, date, src, conf, level], i) => (
                 <tr key={i}>
                   <td><span className="hash-pill">{ioc}</span></td>
                   <td><Badge level={type === "IP" ? "info" : type === "Email" ? "clean" : "purple"}>{type}</Badge></td>
@@ -2220,7 +2363,7 @@ function ThreatIntel() {
         <div className="card">
           <div className="card-hd"><span className="card-title">📊 Top Threat Families This Month</span></div>
           <div className="card-body">
-            {[{n:"Emotet",c:28,pb:"red",p:35},{n:"PayPal / BofA Phishing",c:22,pb:"amber",p:27},{n:"LockBit Ransomware",c:14,pb:"red",p:17},{n:"Info Stealers",c:11,pb:"blue",p:14},{n:"Crypto Miners",c:6,pb:"green",p:7}].map(r => (
+            {(liveFamilies.length ? liveFamilies : [{n:"Emotet",c:28,pb:"red",p:35},{n:"PayPal / BofA Phishing",c:22,pb:"amber",p:27},{n:"LockBit Ransomware",c:14,pb:"red",p:17},{n:"Info Stealers",c:11,pb:"blue",p:14},{n:"Crypto Miners",c:6,pb:"green",p:7}]).map(r => (
               <div key={r.n} className="mb12">
                 <div className="fjsb mb6 mono txt-xs"><span style={{color:r.pb==="red"?"var(--red)":r.pb==="amber"?"var(--amber)":r.pb==="blue"?"var(--blue)":"var(--green)"}}>{r.n}</span><span className="txt-muted">{r.c} samples</span></div>
                 <Pbar val={r.p} color={r.pb} />
@@ -2234,7 +2377,7 @@ function ThreatIntel() {
             <table className="tbl">
               <thead><tr><th>Country</th><th>Attacks</th><th>Share</th></tr></thead>
               <tbody>
-                {[["🇷🇺 Russia","47","32%"],["🇨🇳 China","38","26%"],["🇧🇷 Brazil","21","14%"],["🇮🇷 Iran","18","12%"],["🇺🇸 USA (Proxied)","14","9%"],["🇳🇬 Nigeria","9","6%"]].map(([c, n, p], i) => (
+                {(originRows.length ? originRows : [["🇷🇺 Russia","47","32%"],["🇨🇳 China","38","26%"],["🇧🇷 Brazil","21","14%"],["🇮🇷 Iran","18","12%"],["🇺🇸 USA (Proxied)","14","9%"],["🇳🇬 Nigeria","9","6%"]]).map(([c, n, p], i) => (
                   <tr key={i}><td style={{color:"var(--t1)"}}>{c}</td><td className="mono txt-xs txt-amber" style={{color:"var(--amber)"}}>{n}</td><td className="mono txt-xs txt-muted">{p}</td></tr>
                 ))}
               </tbody>
@@ -2250,7 +2393,7 @@ function ThreatIntel() {
 // PAGE: REPORTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function Reports({ reportsData = null }) {
+function Reports({ reportsData = null, setView }) {
   const reps = [
     {ic:"📄",bg:"rgba(255,45,85,.1)",  name:"invoice_update_Q4.exe — Malware Analysis",  meta:"CRITICAL · PE32 Emotet Trojan · 2024-11-30 14:22", sz:"1.2 MB", level:"critical"},
     {ic:"📄",bg:"rgba(255,45,85,.1)",  name:"secure-paypa1.com — Phishing Investigation",meta:"CRITICAL · PayPal Credential Harvest · 2024-11-30 14:08",sz:"890 KB",level:"critical"},
@@ -2260,6 +2403,42 @@ function Reports({ reportsData = null }) {
     {ic:"📄",bg:"rgba(59,130,246,.1)", name:"Threat Intelligence Digest — Week 48",      meta:"WEEKLY · 12 threats tracked · 2024-11-30",           sz:"3.4 MB",level:"medium"},
   ];
 
+  const allReports = reportsData || reps;
+  const [q, setQ] = useState("");
+  const filteredReports = allReports.filter((r) => {
+    const v = `${r?.name || ""} ${r?.meta || ""}`.toLowerCase();
+    return !q || v.includes(String(q).toLowerCase());
+  });
+  const reportStats = allReports.reduce((acc, r) => {
+    acc.total += 1;
+    if (["critical", "high", "medium"].includes(String(r.level || "").toLowerCase())) acc.threat += 1;
+    acc.iocs += Number(r.iocCount || 0);
+    return acc;
+  }, { total: 0, threat: 0, iocs: 0 });
+
+  const handleReportView = (r) => {
+    const t = String(r?.sourceType || "").toLowerCase();
+    if (t === "url") setView("url-scan");
+    else if (t === "log") setView("log-scan");
+    else setView("history");
+  };
+
+  const handleReportPdf = async (r, i) => {
+    try {
+      const t = String(r?.sourceType || "").toLowerCase();
+      if (t === "url" && r?.sourceTarget) {
+        const blob = await apiBlob("/api/generate-url-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: r.sourceTarget }),
+        });
+        downloadBlob(blob, "ghosttrace_url_report.pdf");
+        return;
+      }
+      downloadJson(r, `ghosttrace_report_${i + 1}.json`);
+    } catch (e) { reportClientError("Report action failed", e); }
+  };
+
   return (
     <div className="view">
       <div className="fjsb mb20">
@@ -2268,15 +2447,15 @@ function Reports({ reportsData = null }) {
           <div className="txt-sec txt-sm">Downloadable PDF forensic reports for all completed investigations</div>
         </div>
         <div className="fac gap8">
-          <button className="btn btn-ghost btn-sm">⬇ Export All</button>
-          <button className="btn btn-primary">+ New Scan</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => downloadJson(allReports, "ghosttrace_reports_archive.json")}>⬇ Export All</button>
+          <button className="btn btn-primary" onClick={() => setView("file-scan")}>+ New Scan</button>
         </div>
       </div>
 
       <div className="g3 mb16">
-        <div className="stat c-green"><div className="stat-val" style={{color:"var(--green)"}}>62</div><div className="stat-lbl">Reports Generated</div></div>
-        <div className="stat c-red"><div className="stat-val" style={{color:"var(--red)"}}>38</div><div className="stat-lbl">Threat Investigations</div></div>
-        <div className="stat c-cyan"><div className="stat-val" style={{color:"var(--cyan)"}}>1,204</div><div className="stat-lbl">IOCs Documented</div></div>
+        <div className="stat c-green"><div className="stat-val" style={{color:"var(--green)"}}>{reportStats.total}</div><div className="stat-lbl">Reports Generated</div></div>
+        <div className="stat c-red"><div className="stat-val" style={{color:"var(--red)"}}>{reportStats.threat}</div><div className="stat-lbl">Threat Investigations</div></div>
+        <div className="stat c-cyan"><div className="stat-val" style={{color:"var(--cyan)"}}>{reportStats.iocs}</div><div className="stat-lbl">IOCs Documented</div></div>
       </div>
 
       <div className="card mb16">
@@ -2284,11 +2463,11 @@ function Reports({ reportsData = null }) {
           <span className="card-title">📋 Report Archive</span>
           <div className="search-bar" style={{ width:220, height:32 }}>
             <span className="txt-muted" style={{fontSize:13}}>🔍</span>
-            <input placeholder="Search reports…" />
+            <input placeholder="Search reports…" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
         </div>
         <div className="card-body">
-          {(reportsData || reps).map((r, i) => (
+          {filteredReports.map((r, i) => (
             <div key={i} className="rep-card">
               <div className="rep-icon" style={{ background:r.bg }}>{r.ic}</div>
               <div className="f1" style={{ minWidth:0 }}>
@@ -2297,8 +2476,8 @@ function Reports({ reportsData = null }) {
               </div>
               <Badge level={r.level} />
               <div className="fac gap6">
-                <button className="btn btn-ghost btn-sm">View</button>
-                <button className="btn btn-sec btn-sm">⬇ PDF</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => handleReportView(r)}>View</button>
+                <button className="btn btn-sec btn-sm" onClick={() => handleReportPdf(r, i)}>⬇ PDF</button>
               </div>
             </div>
           ))}
@@ -2358,6 +2537,11 @@ function Settings({ backendStatus }) {
     phishtank: "",
   });
   const [serverMasked, setServerMasked] = useState({});
+  const [watchUrl, setWatchUrl] = useState("");
+  const [watchlist, setWatchlist] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [monitorMsg, setMonitorMsg] = useState("");
+  const [monitorBusy, setMonitorBusy] = useState(false);
   const tog = k => setT(p => ({ ...p, [k]: !p[k] }));
   const setKey = (k, v) => setKeys((prev) => ({ ...prev, [k]: v }));
 
@@ -2373,6 +2557,16 @@ function Settings({ backendStatus }) {
       }
     } catch (e) { reportClientError("Load local settings failed", e); }
   }, []);
+
+  const loadMonitor = useCallback(async () => {
+    try {
+      const data = await apiJson("/api/monitor/status");
+      setWatchlist(Array.isArray(data?.watchlist) ? data.watchlist : []);
+      setAlerts(Array.isArray(data?.alerts) ? data.alerts : []);
+    } catch (e) { reportClientError("Load monitor status failed", e); }
+  }, []);
+
+  useEffect(() => { loadMonitor(); }, [loadMonitor]);
 
   useEffect(() => {
     (async () => {
@@ -2406,6 +2600,50 @@ function Settings({ backendStatus }) {
         }),
       });
     } catch (e) { reportClientError("Save API keys to backend failed", e); }
+  };
+
+  const addWatch = async () => {
+    const raw = String(watchUrl || "").trim();
+    if (!raw) {
+      setMonitorMsg("Enter a URL first.");
+      return;
+    }
+    let normalized = raw;
+    if (!/^https?:\/\//i.test(normalized)) normalized = `https://${normalized}`;
+    try {
+      const parsed = new URL(normalized);
+      if (!parsed.hostname) throw new Error("Invalid URL");
+      normalized = parsed.toString();
+    } catch {
+      setMonitorMsg("Invalid URL. Use a valid domain or full URL.");
+      return;
+    }
+    setMonitorBusy(true);
+    try {
+      await apiJson("/api/monitor/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: normalized }),
+      });
+      setWatchUrl("");
+      await loadMonitor();
+      setMonitorMsg(`Added to watchlist: ${normalized}`);
+    } catch (e) {
+      reportClientError("Add monitor URL failed", e);
+      setMonitorMsg(`Add failed: ${e?.message || "Request failed"}`);
+    } finally { setMonitorBusy(false); }
+  };
+
+  const runMonitorCheck = async () => {
+    setMonitorBusy(true);
+    try {
+      await apiJson("/api/monitor/check", { method: "POST" });
+      await loadMonitor();
+      setMonitorMsg("Monitor check completed.");
+    } catch (e) {
+      reportClientError("Run monitor check failed", e);
+      setMonitorMsg(`Run Check failed: ${e?.message || "Request failed"}`);
+    } finally { setMonitorBusy(false); }
   };
 
   return (
@@ -2491,6 +2729,34 @@ function Settings({ backendStatus }) {
                   <Toggle on={t[k]} onChange={() => tog(k)} />
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="card mb14">
+            <div className="card-hd"><span className="card-title">👁 Monitor Controls</span></div>
+            <div className="card-body">
+              <label className="inp-label">Add URL To Watchlist</label>
+              <div className="fac gap8 mb12">
+                <input className="inp f1" placeholder="https://example.com" value={watchUrl} onChange={(e) => setWatchUrl(e.target.value)} />
+                <button className="btn btn-primary" onClick={addWatch} disabled={monitorBusy}>Add</button>
+                <button className="btn btn-sec" onClick={runMonitorCheck} disabled={monitorBusy}>Run Check</button>
+              </div>
+              {monitorMsg && <div className="mono txt-xs txt-muted mb8">{monitorMsg}</div>}
+              <div className="mono txt-xs txt-muted mb8">Watchlist: {watchlist.length} items · Alerts: {alerts.length}</div>
+              <div className="card" style={{ background:"rgba(255,255,255,.01)", border:"1px solid var(--border)" }}>
+                <div className="card-body" style={{ maxHeight:180, overflowY:"auto" }}>
+                  {(alerts.slice(0, 10)).map((a, i) => (
+                    <div key={i} className="ck-row">
+                      <div className="ck-lbl" style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a?.url || "-"}</div>
+                      <div className="fac gap6">
+                        <span className="mono txt-xs txt-muted">{a?.risk_score ?? "-"}</span>
+                        <Badge level={normalizeLevel(a?.threat_level || "medium")}>{String(a?.threat_level || "medium").toUpperCase()}</Badge>
+                      </div>
+                    </div>
+                  ))}
+                  {!alerts.length && <div className="txt-xs txt-muted">No alerts yet. Add a URL and run check.</div>}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2630,7 +2896,7 @@ export default function GhostTrace() {
     yara: false,
     authState: "unknown",
     statusText: "Initializing backend status",
-    providers: { virustotal: false, abuseipdb: false, phishtank: false },
+    providers: { virustotal: false, abuseipdb: false, phishtank: false, urlscan: false },
   });
 
   useEffect(() => {
@@ -2653,6 +2919,11 @@ export default function GhostTrace() {
           const sev = normalizeLevel(r?.severity || r?.risk_level);
           const created = r?.created_at ? new Date(r.created_at).toLocaleString() : "-";
           const target = r?.target || r?.filename || r?.url || `Report ${i + 1}`;
+          const summary = String(r?.result_summary || "");
+          const iocCount = Number((summary.match(/\bIPs?:\s*(\d+)/i) || [])[1] || 0)
+            + Number((summary.match(/\bHashes?:\s*(\d+)/i) || [])[1] || 0)
+            + Number((summary.match(/\bURLs?:\s*(\d+)/i) || [])[1] || 0)
+            + Number((summary.match(/\bDomains?:\s*(\d+)/i) || [])[1] || 0);
           return {
             ic: "📄",
             bg: sev === "critical" ? "rgba(255,45,85,.1)" : sev === "high" ? "rgba(255,170,0,.1)" : sev === "clean" ? "rgba(0,255,136,.08)" : "rgba(59,130,246,.1)",
@@ -2660,6 +2931,9 @@ export default function GhostTrace() {
             meta: `${sev.toUpperCase()} · ${created}`,
             sz: r?.size || "PDF",
             level: sev,
+            sourceType: r?.report_type || "",
+            sourceTarget: r?.url || r?.target || r?.filename || "",
+            iocCount,
           };
         });
         if (reportCards.length) setReportsData(reportCards);
@@ -2712,8 +2986,10 @@ export default function GhostTrace() {
             virustotal: Boolean(libs?.provider_status?.virustotal || localKeys?.virustotal),
             abuseipdb: Boolean(libs?.provider_status?.abuseipdb || localKeys?.abuseipdb),
             phishtank: Boolean(libs?.provider_status?.phishtank || localKeys?.phishtank),
+            urlscan: Boolean(libs?.provider_status?.urlscan || localKeys?.urlscan),
           },
           watchlistCount: Array.isArray(monitor?.watchlist) ? monitor.watchlist.length : 0,
+          alerts: monitor?.alerts || [],
         });
       } catch (e) {
         reportClientError("Load backend status failed", e);
@@ -2733,15 +3009,15 @@ export default function GhostTrace() {
       <div className="gt-main">
         <Topbar view={view} backendStatus={backendStatus} />
         <div className="gt-scroll">
-          {view === "dashboard" && <Dashboard setView={setView} />}
+          {view === "dashboard" && <Dashboard setView={setView} historyItems={historyItems} reportsData={reportsData} backendStatus={backendStatus} />}
           {view === "history"   && <ScanHistory setView={setView} historyItems={historyItems} />}
           {view === "file-scan" && <FileScanner />}
           {view === "url-scan"  && <URLScanner />}
           {view === "log-scan"  && <LogAnalyzer />}
           {view === "ioc"       && <IOCExtractor />}
-          {view === "timeline"  && <AttackTimeline />}
-          {view === "intel"     && <ThreatIntel />}
-          {view === "reports"   && <Reports reportsData={reportsData} />}
+          {view === "timeline"  && <AttackTimeline historyItems={historyItems} backendStatus={backendStatus} />}
+          {view === "intel"     && <ThreatIntel backendStatus={backendStatus} historyItems={historyItems} />}
+          {view === "reports"   && <Reports reportsData={reportsData} setView={setView} />}
           {view === "settings"  && <Settings backendStatus={backendStatus} />}
         </div>
       </div>

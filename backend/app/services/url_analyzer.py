@@ -23,6 +23,27 @@ except Exception:  # pragma: no cover
 from app.schemas import UrlAnalysisResult
 logger = logging.getLogger(__name__)
 
+def _openai_generate_text(client, model: str, prompt: str, max_tokens: int = 220) -> str:
+    if hasattr(client, "responses"):
+        resp = client.responses.create(model=model, input=prompt, max_output_tokens=max_tokens)
+        return (getattr(resp, "output_text", "") or "").strip()
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+    )
+    return ((resp.choices[0].message.content if resp and resp.choices else "") or "").strip()
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    if "ratelimit" in name:
+        return True
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return True
+    return "429" in str(exc)
+
 
 def _safe_get_json(url: str, headers: dict[str, str] | None = None) -> dict[str, Any] | None:
     req = Request(url, headers=headers or {})
@@ -361,8 +382,37 @@ def _generate_url_ai_explanation(
             f"Injection indicators: {injections}\n"
             "Output concise 4-6 sentences with evidence chain."
         )
-        resp = client.responses.create(model="gpt-4.1-mini", input=prompt, max_output_tokens=220)
-        return (resp.output_text or "").strip() or "AI explanation returned empty output."
+        models = [os.getenv("OPENAI_MODEL", "").strip() or "gpt-4.1-mini", "gpt-4o-mini"]
+        seen = set()
+        last_exc: Exception | None = None
+        for model in models:
+            if model in seen:
+                continue
+            seen.add(model)
+            for attempt in range(3):
+                try:
+                    text = _openai_generate_text(client, model, prompt, max_tokens=220)
+                    if text:
+                        return text
+                except Exception as exc:
+                    last_exc = exc
+                    logger.debug("OpenAI URL explanation failed for %s model=%s attempt=%s: %s", target_url, model, attempt + 1, exc)
+                    if _is_rate_limited(exc) and attempt < 2:
+                        time.sleep(1.2 * (attempt + 1))
+                        continue
+                    break
+        reason = f" ({type(last_exc).__name__})" if last_exc else ""
+        if last_exc and _is_rate_limited(last_exc):
+            return (
+                "AI explanation service is temporarily rate-limited. "
+                "Deterministic forensic findings remain available from integrated scanners. "
+                "Retry in a few moments."
+            )
+        return (
+            "AI explanation service could not be reached"
+            f"{reason}. Deterministic forensic findings "
+            "remain available from integrated scanners."
+        )
     except Exception as exc:
         logger.debug("OpenAI URL explanation failed for %s: %s", target_url, exc)
         return (
