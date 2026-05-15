@@ -61,3 +61,19 @@ class ApiKeysUpdateRequest(BaseModel):
     openai_api_key: str | None = None
     urlscan_api_key: str | None = None
     phishtank_api_key: str | None = None
+
+
+class UnifiedInvestigationResult(BaseModel):
+    target: str
+    type: str  # 'file', 'url', or 'log'
+    risk_score: int
+    severity: str  # 'low', 'medium', 'high', 'critical'
+    confidence: int
+    iocs: list[dict[str, str]]
+    timeline: list[dict[str, Any]]
+    ai_explanation: str
+    recommendations: list[str]
+    health_breakdown: dict[str, int] | None = None
+    mitre_mapping: list[dict[str, str]] | None = None
+    raw_artifacts: dict[str, Any] | None = None
+    evidence: list[str] | None = None

@@ -20,7 +20,8 @@ try:
     from openai import OpenAI
 except Exception:  # pragma: no cover
     OpenAI = None
-from app.schemas import UrlAnalysisResult
+from app.services.ai_engine import get_mitre_mapping
+from app.schemas import UrlAnalysisResult, UnifiedInvestigationResult
 logger = logging.getLogger(__name__)
 
 def _openai_generate_text(client, model: str, prompt: str, max_tokens: int = 220) -> str:
@@ -441,12 +442,15 @@ def _normalize_target_url(target_url: str) -> str:
     return candidate
 
 
-def analyze_url(target_url: str) -> UrlAnalysisResult:
+from app.schemas import UrlAnalysisResult, UnifiedInvestigationResult
+logger = logging.getLogger(__name__)
+
+# ... (internal functions stay the same, I'll only replace analyze_url)
+
+def analyze_url(target_url: str) -> UnifiedInvestigationResult:
     normalized_url = _normalize_target_url(target_url)
     parsed = urlparse(normalized_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Invalid URL. Use full URL format, e.g. https://example.com")
-
+    
     domain = parsed.hostname or parsed.netloc
     path = (parsed.path or "").lower()
     query = (parsed.query or "").lower()
@@ -455,183 +459,122 @@ def analyze_url(target_url: str) -> UrlAnalysisResult:
     vulnerability_findings: list[str] = []
     score = 10
 
+    # ── Protocol & Keywords ──
     if parsed.scheme != "https":
         score += 20
-        findings.append("URL does not use HTTPS.")
-    if any(k in normalized_url.lower() for k in ["login", "verify", "secure", "password", "signin"]):
-        score += 12
-        findings.append("Phishing keyword patterns detected in URL.")
-    if any(k in query for k in ["redirect=", "url=", "next=", "target="]):
-        score += 10
-        findings.append("Suspicious redirect query parameters found.")
-        vulnerability_findings.append("Possible open redirect exposure.")
-    if any(x in query for x in ["%3cscript", "<script", "onerror=", "onload="]):
-        score += 14
-        vulnerability_findings.append("Possible reflected XSS payload pattern.")
-    if ".php" in path and "id=" in query:
-        score += 10
-        vulnerability_findings.append("SQL injection probe-like URL structure.")
-    if any(x in path for x in ["admin", "wp-admin", "phpmyadmin"]):
-        score += 9
-        vulnerability_findings.append("Possible exposed admin panel path.")
-    if any(x in path for x in ["shell", "backdoor", "cmd"]):
-        score += 14
-        malware_injection_findings.append("Potential web-shell/backdoor naming pattern.")
-    if any(x in path for x in [".js", ".zip", ".exe", ".scr"]):
-        score += 10
-        malware_injection_findings.append("Suspicious script or payload delivery path.")
-    if "iframe" in query or "iframe" in path:
-        score += 10
-        malware_injection_findings.append("Potential hidden iframe injection signal.")
+        findings.append("URL does not use HTTPS; traffic is exposed to interception.")
+    if any(k in normalized_url.lower() for k in ["login", "verify", "secure", "password", "signin", "paypal", "bank"]):
+        score += 15
+        findings.append("Phishing-typical keywords or brand impersonation detected in URL string.")
+        
+    # ── Vulnerability Patterns ──
+    if any(k in query for k in ["redirect=", "url=", "next=", "target=", "dest="]):
+        score += 15
+        vulnerability_findings.append("Potential open-redirect vulnerability in query parameters.")
+    if any(x in query or x in path for x in ["<script", "%3cscript", "javascript:", "onload=", "onerror="]):
+        score += 20
+        vulnerability_findings.append("XSS (Cross-Site Scripting) payload pattern detected in URL.")
+    if any(x in query for x in ["'", " union ", "--", "select ", "drop ", "table "]):
+        score += 20
+        vulnerability_findings.append("SQL Injection probe pattern detected in query string.")
+        
+    # ── Path-based Threats ──
+    if any(x in path for x in ["admin", "wp-admin", "phpmyadmin", "config", "setup", ".git", ".env"]):
+        score += 15
+        vulnerability_findings.append("Exposed sensitive path or management interface detected.")
+    if any(x in path for x in ["shell", "backdoor", "cmd", "exec", "upload"]):
+        score += 20
+        malware_injection_findings.append("Path signature aligns with web-shell or backdoor artifacts.")
 
+    # ── Enrichment & Page Analysis ──
     ssl_info = _ssl_certificate_analysis(domain)
     rep = _domain_reputation(domain)
     ip_rep = _ip_reputation(domain)
     urlscan = _urlscan_lookup(normalized_url)
-    urlscan_fresh = _urlscan_submit_and_poll(normalized_url)
     page_artifacts = _fetch_page_artifacts(normalized_url)
-    zap = _zap_quick_assessment(normalized_url)
 
     if rep["blacklist_hit"]:
-        score += 25
-        findings.append("Domain appears on blacklist/reputation feeds.")
+        score += 30
+        findings.append("Domain is explicitly flagged on global threat reputation feeds.")
     if urlscan.get("available") and urlscan.get("verdict") is True:
-        score += 20
-        findings.append("URLScan indicates malicious verdict.")
-    if urlscan_fresh.get("submitted") and urlscan_fresh.get("ready") and urlscan_fresh.get("verdict") is True:
-        score += 18
-        findings.append("Fresh URLScan submission returned malicious verdict.")
-    if page_artifacts.get("iframe_count", 0) > 0:
-        score += 8
-        findings.append("Fetched page contains iframe elements.")
+        score += 25
+        findings.append("URLScan.io reputation engine returned a confirmed malicious verdict.")
+    
     if page_artifacts.get("hidden_iframe_count", 0) > 0:
-        score += 10
-        findings.append("Hidden iframe behavior detected in fetched content.")
-    if page_artifacts.get("script_count", 0) > 15:
-        score += 8
-        findings.append("Fetched page contains high script density.")
-    if page_artifacts.get("suspicious_script_patterns"):
-        score += 12
-        findings.append("Suspicious obfuscation or miner-like script patterns found.")
-        malware_injection_findings.append("Script content matches obfuscation/miner signatures.")
-    if page_artifacts.get("suspicious_form_count", 0) > 0:
-        score += 9
-        findings.append("Login-like forms with risky action handling were detected.")
-    if not ssl_info["has_tls"]:
         score += 15
-    elif ssl_info["status"] in {"Expired certificate", "Certificate expiring soon"}:
-        score += 10
+        malware_injection_findings.append("Hidden iframes detected; common technique for drive-by downloads.")
+    if page_artifacts.get("suspicious_script_patterns"):
+        score += 20
+        malware_injection_findings.append("Obfuscated or malicious JavaScript patterns detected in page content.")
+    if page_artifacts.get("suspicious_form_count", 0) > 0:
+        score += 15
+        findings.append("Suspicious credential harvesting form detected over insecure connection.")
 
-    score = max(0, min(score, 100))
+    score = min(score, 100)
     threat_level = "safe"
     if score >= 80:
         threat_level = "critical"
     elif score >= 60:
         threat_level = "high"
     elif score >= 35:
-        threat_level = "suspicious"
+        threat_level = "medium"
+    else:
+        threat_level = "low"
+        if score < 15: threat_level = "clean"
 
-    confidence = min(96, max(45, 55 + len(findings) * 6))
-    if zap.get("enabled") and zap.get("available"):
-        vulnerability_findings.append("OWASP ZAP alerts summary was included in this assessment.")
     explanation = _generate_url_ai_explanation(
         normalized_url, findings, vulnerability_findings, malware_injection_findings
     )
-    malware_families = _malware_family_mapping(findings + malware_injection_findings)
 
+    # ── Standardizing IOCs ──
     iocs = [{"type": "domain", "value": domain}, {"type": "url", "value": normalized_url}]
     try:
-        iocs.append({"type": "ip", "value": socket.gethostbyname(domain)})
-    except OSError as exc:
-        logger.debug("IOC IP resolution failed for domain=%s: %s", domain, exc)
-    for script_src in page_artifacts.get("external_script_samples", [])[:10]:
-        iocs.append({"type": "script", "value": script_src})
-    for suspicious_path in page_artifacts.get("suspicious_paths", [])[:10]:
-        iocs.append({"type": "suspicious_path", "value": suspicious_path})
-    for email in page_artifacts.get("emails", [])[:10]:
-        iocs.append({"type": "email", "value": email})
+        ip = socket.gethostbyname(domain)
+        iocs.append({"type": "ip", "value": ip})
+    except: pass
+    
+    for script in page_artifacts.get("external_script_samples", [])[:5]:
+        iocs.append({"type": "script", "value": script})
 
-    health_breakdown = {
-        "ssl_security": 30 if not ssl_info["has_tls"] else 85 if ssl_info["status"] == "Certificate valid" else 55,
-        "malware_presence": max(20, 100 - score),
-        "vulnerability_exposure": max(20, 92 - int(score * 0.8)),
-        "reputation": 30 if rep["blacklist_hit"] else 80,
-        "content_integrity": max(20, 88 - int(score * 0.7)),
-    }
-
-    recs = [
-        "Run this URL in a controlled sandbox browser before any user access.",
-        "Correlate detected IOC domain/IP in DNS, proxy, and EDR telemetry.",
-        "Block confirmed malicious domains/IPs at DNS and secure web gateway.",
+    # ── Timeline Construction ──
+    timeline = [
+        {"stage": "DNS/SSL Audit", "details": f"Analyzed {domain}. {ssl_info['status']}.", "sev": "low" if ssl_info['has_tls'] else "medium"},
     ]
-    if threat_level in {"high", "critical"}:
-        recs.append("Trigger incident response triage for potentially affected user endpoints.")
+    if rep["blacklist_hit"] or (urlscan.get("available") and urlscan.get("verdict")):
+        timeline.append({"stage": "Reputation Check", "details": "Negative reputation found in global threat feeds.", "sev": "high"})
+    
+    if findings or vulnerability_findings or malware_injection_findings:
+        timeline.append({"stage": "Content Analysis", "details": f"Found {len(findings)+len(vulnerability_findings)+len(malware_injection_findings)} suspicious indicators in URL and HTML.", "sev": "high" if score > 60 else "medium"})
+        
+    timeline.append({"stage": "AI Synthesis", "details": "Attack reconstruction and behavior analysis completed.", "sev": "low"})
 
-    website_compromise_indicators = []
-    if page_artifacts.get("hidden_iframe_count", 0) > 0:
-        website_compromise_indicators.append("Hidden iframe behavior suggests potential injected content.")
-    if page_artifacts.get("suspicious_script_patterns"):
-        website_compromise_indicators.append("Script obfuscation/miner patterns detected in page content.")
-    if any("backdoor" in x.lower() or "shell" in x.lower() for x in page_artifacts.get("suspicious_paths", [])):
-        website_compromise_indicators.append("Suspicious path signatures aligned with backdoor/web-shell artifacts.")
-    if rep["blacklist_hit"]:
-        website_compromise_indicators.append("Domain is flagged by one or more blacklist/reputation sources.")
-
-    security_feedback = {
-        "severity_level": threat_level,
-        "confidence_score": confidence,
-        "threat_explanation": explanation,
-        "what_to_do_next": recs[:3],
-        "audience_note": "This assessment is defensive and evidence-based; validate with incident response context before containment actions.",
-    }
-
-    return UrlAnalysisResult(
-        input_url=normalized_url,
-        domain=domain,
+    return UnifiedInvestigationResult(
+        target=normalized_url,
+        type="url",
         risk_score=score,
-        threat_level=threat_level,
-        confidence=confidence,
-        threat_explanation=explanation,
-        findings=findings or ["No high-confidence malicious indicators from current checks."],
-        malware_injection_findings=malware_injection_findings or ["No direct web injection pattern identified."],
-        vulnerability_findings=vulnerability_findings or ["No high-confidence vulnerability signal identified."],
-        suspicious_behaviors_detected=len(findings),
+        severity=threat_level,
+        confidence=min(98, max(40, 50 + len(findings)*8)),
         iocs=iocs,
-        website_compromise_indicators=website_compromise_indicators or ["No strong website compromise indicators were confirmed from current evidence."],
-        security_feedback=security_feedback,
-        page_artifacts=page_artifacts,
-        threat_intel_mapping={
-            "suspicious_domains": [domain],
-            "ip_reputation": ip_rep,
-            "malware_families": malware_families,
-            "related_attack_infrastructure": [
-                "Landing domain",
-                "Potential redirect endpoint",
-                "Potential payload location",
-            ],
-            "known_malicious_patterns": findings + malware_injection_findings + vulnerability_findings,
-        },
-        reputation_signals={
-            "blacklist_status": "listed" if rep["blacklist_hit"] else "not_listed_or_unavailable",
-            "blacklist_sources": rep["blacklist_sources"],
-            "domain_reputation": rep["domain_reputation"],
-            "urlscan": urlscan,
-            "urlscan_fresh": urlscan_fresh,
-            "zap": zap,
-            "ssl_certificate_analysis": ssl_info,
-            "provider_status": {
-                "virustotal": bool(os.getenv("VIRUSTOTAL_API_KEY")),
-                "abuseipdb": bool(os.getenv("ABUSEIPDB_API_KEY")),
-                "urlscan": bool(os.getenv("URLSCAN_API_KEY")),
-                "phishtank": bool(os.getenv("PHISHTANK_API_KEY")),
-            },
-        },
-        health_breakdown=health_breakdown,
-        possible_attack_chain=[
-            "Initial lure via suspicious URL delivery",
-            "Victim redirection or scripted web interaction",
-            "Credential theft or payload staging",
-            "Persistence or monetization objective",
+        timeline=timeline,
+        ai_explanation=explanation,
+        recommendations=[
+            "Do not visit this URL in a standard browser.",
+            "Block this domain at the perimeter firewall/web gateway.",
+            "Verify if any internal users have visited this URL via proxy logs."
         ],
-        recommendations=recs,
+        mitre_mapping=get_mitre_mapping(findings + vulnerability_findings + malware_injection_findings),
+        health_breakdown={
+            "ssl": 100 if ssl_info["has_tls"] else 0,
+            "reputation": 0 if rep["blacklist_hit"] else 100,
+            "malware": max(0, 100 - (len(malware_injection_findings) * 30)),
+            "vulnerability": max(0, 100 - (len(vulnerability_findings) * 25))
+        },
+        raw_artifacts={
+            "domain": domain,
+            "ip_reputation": ip_rep,
+            "ssl_info": ssl_info,
+            "page_artifacts": page_artifacts,
+            "urlscan": urlscan
+        },
+        evidence=findings + vulnerability_findings + malware_injection_findings
     )

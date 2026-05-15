@@ -4,8 +4,8 @@ import re
 from typing import Any
 from fastapi import UploadFile
 from app.services.ioc_extractor import extract_iocs
-from app.services.ai_engine import explain_behavior
-from app.schemas import AnalysisResult, TimelineEvent
+from app.services.ai_engine import explain_behavior, get_mitre_mapping
+from app.schemas import AnalysisResult, TimelineEvent, UnifiedInvestigationResult
 from app.services.yara_scanner import yara_scan_content
 
 
@@ -33,44 +33,86 @@ def compute_entropy(content: bytes) -> float:
 
 
 def find_suspicious_strings(content: bytes) -> list[str]:
-    decoded = content.decode("utf-8", errors="ignore")
+    # Extract strings in both UTF-8 and UTF-16 (common in Windows binaries)
     findings = set()
-    for pattern in [b"http", b"https", b"ftp", b"powershell", b"cmd.exe", b"/c", b"Invoke-Expression"]:
-        if pattern.decode("utf-8", errors="ignore") in decoded:
-            findings.add(pattern.decode("utf-8", errors="ignore"))
+    try:
+        utf8_text = content.decode("utf-8", errors="ignore")
+        utf16_text = content.decode("utf-16", errors="ignore")
+    except Exception:
+        utf8_text = content.decode("latin-1", errors="ignore")
+        utf16_text = ""
+
+    combined_text = utf8_text + " " + utf16_text
+    
+    keywords = [
+        "http", "https", "ftp", "powershell", "cmd.exe", "/c", "Invoke-Expression",
+        "VirtualAlloc", "CreateRemoteThread", "WriteProcessMemory", "GetProcAddress",
+        "LoadLibrary", "RegSetValue", "IsDebuggerPresent", "WinExec"
+    ]
+    
+    for kw in keywords:
+        if kw.lower() in combined_text.lower():
+            findings.add(kw)
+            
+    # Add regex patterns
     for regex in [r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", r"https?://[^\s'\"]+", r"\\\d{1,3}(?:\\.\\d{1,3}){3}"]:
-        for match in re.findall(regex, decoded):
+        for match in re.findall(regex, combined_text):
             findings.add(match)
+            
     return sorted(findings)
 
 
-def compute_risk_score(analysis: AnalysisResult) -> dict[str, Any]:
+def compute_risk_score(analysis: Any, yara_matches: list[str]) -> dict[str, Any]:
     score = 0
-    if analysis.entropy >= 7.0:
-        score += 2
-    if analysis.iocs and any(analysis.iocs.values()):
-        score += 2
-    if analysis.suspicious_strings:
-        score += 1
-    if analysis.file_type in {"PE executable", "ELF executable", "Windows executable"}:
-        score += 1
+    # Entropy weight
+    if analysis.entropy >= 7.2:
+        score += 25
+    elif analysis.entropy >= 6.5:
+        score += 15
+        
+    # YARA weight (Strong signal)
+    if yara_matches:
+        score += 40
+        if any("malware" in m.lower() or "trojan" in m.lower() for m in yara_matches):
+            score += 20
+            
+    # IOC weight
+    ioc_count = sum(len(v) for v in analysis.iocs.values() if isinstance(v, list))
+    if ioc_count > 5:
+        score += 20
+    elif ioc_count > 0:
+        score += 10
+        
+    # Suspicious strings
+    if len(analysis.suspicious_strings) > 10:
+        score += 15
+    elif len(analysis.suspicious_strings) > 0:
+        score += 5
+        
+    # Executable type
+    if analysis.file_type in {"PE executable", "ELF executable"}:
+        score += 5
 
-    if score >= 5:
+    score = min(score, 100)
+    
+    if score >= 80:
         severity = "critical"
-        confidence = 91
-    elif score >= 4:
+        confidence = 92
+    elif score >= 60:
         severity = "high"
-        confidence = 78
-    elif score >= 2:
-        severity = "suspicious"
-        confidence = 56
+        confidence = 80
+    elif score >= 30:
+        severity = "medium"
+        confidence = 65
     else:
-        severity = "safe"
-        confidence = 24
+        severity = "low"
+        confidence = 30
+        if score < 10:
+            severity = "clean" if not yara_matches else "low"
 
     explanation = (
-        f"Risk set to {severity} based on entropy ({analysis.entropy}), "
-        f"{len(analysis.suspicious_strings)} suspicious string findings, and IOC presence."
+        f"Risk score of {score} determined by entropy ({analysis.entropy}), "
+        f"YARA hits ({len(yara_matches)}), and {len(analysis.suspicious_strings)} suspicious strings."
     )
 
     return {
@@ -102,100 +144,94 @@ def detect_file_type(content: bytes, filename: str) -> str:
 
 def build_timeline(
     file_type: str, suspicious_strings: list[str], iocs: dict[str, list[str]]
-) -> list[TimelineEvent]:
-    timeline = [TimelineEvent(stage="initial_execution", details=f"Sample classified as {file_type}.")]
+) -> list[dict[str, Any]]:
+    timeline = [{"stage": "Initial Analysis", "details": f"File identified as {file_type}.", "sev": "low"}]
+    
     if suspicious_strings:
-        timeline.append(
-            TimelineEvent(
-                stage="artifact_observation",
-                details=f"Detected suspicious strings: {', '.join(suspicious_strings[:5])}.",
-            )
-        )
-    if iocs.get("urls") or iocs.get("ips") or iocs.get("domains"):
-        timeline.append(
-            TimelineEvent(
-                stage="network_activity",
-                details="Potential network communication indicators were extracted.",
-            )
-        )
-    if iocs.get("registry_keys"):
-        timeline.append(
-            TimelineEvent(
-                stage="persistence",
-                details="Registry-related indicators suggest persistence attempts.",
-            )
-        )
-    if iocs.get("suspicious_commands"):
-        timeline.append(
-            TimelineEvent(
-                stage="execution_behavior",
-                details="Suspicious shell commands imply scripted or command-line execution.",
-            )
-        )
-    yara_info = iocs.get("yara_rule_matches", [])
-    if yara_info:
-        timeline.append(
-            TimelineEvent(
-                stage="signature_detection",
-                details=f"YARA rule matches detected: {', '.join(yara_info)}.",
-            )
-        )
+        timeline.append({
+            "stage": "Static Observation",
+            "details": f"Extracted {len(suspicious_strings)} suspicious strings including obfuscation keywords.",
+            "sev": "medium"
+        })
+        
+    if iocs.get("yara_rule_matches"):
+        timeline.append({
+            "stage": "Signature Match",
+            "details": f"YARA signatures matched: {', '.join(iocs['yara_rule_matches'][:3])}.",
+            "sev": "high"
+        })
+
+    if iocs.get("urls") or iocs.get("ips"):
+        timeline.append({
+            "stage": "Network Capability",
+            "details": "Embedded network indicators suggest potential C2 or download behavior.",
+            "sev": "medium"
+        })
+        
     return timeline
 
 
 def build_recommendations(risk_severity: str) -> list[str]:
     base = [
-        "Preserve the sample and related artifacts with chain-of-custody metadata.",
-        "Correlate extracted IOCs against SIEM/EDR telemetry and threat intel feeds.",
+        "Quarantine the file immediately and prevent execution.",
+        "Correlate hashes and IPs against organizational SIEM/EDR logs.",
     ]
     if risk_severity in {"high", "critical"}:
         return base + [
-            "Isolate the affected host from the network pending triage.",
-            "Block matched IOC domains/IPs at perimeter and endpoint controls.",
-            "Acquire memory and disk images for deeper forensic analysis.",
+            "Initiate incident response for the source endpoint.",
+            "Block extracted domains/IPs at the perimeter firewall.",
+            "Perform memory forensics on any host where this file was executed.",
         ]
-    if risk_severity == "suspicious":
-        return base + [
-            "Run the sample in an isolated sandbox for dynamic behavior confirmation.",
-            "Monitor hosts for recurrence of extracted commands and indicators.",
-        ]
-    return base + ["No immediate containment required; continue monitoring for related activity."]
+    return base + ["Continue monitoring for related indicators of compromise."]
 
 
-async def analyze_file(file: UploadFile) -> AnalysisResult:
+async def analyze_file(file: UploadFile) -> UnifiedInvestigationResult:
     content = await file.read()
     hashes = compute_hashes(content)
     entropy = compute_entropy(content)
     suspicious_strings = find_suspicious_strings(content)
     iocs = extract_iocs(content)
     yara_result = yara_scan_content(content)
-    iocs["yara_rule_matches"] = yara_result.get("matches", [])
+    yara_matches = yara_result.get("matches", [])
+    iocs["yara_rule_matches"] = yara_matches
+    
     file_type = detect_file_type(content, file.filename)
     ai_summary = explain_behavior(file.filename, file_type, suspicious_strings, iocs)
-    risk = compute_risk_score(AnalysisResult(
-        filename=file.filename,
-        file_type=file_type,
-        entropy=entropy,
-        hashes=hashes,
-        suspicious_strings=suspicious_strings,
-        iocs=iocs,
-        ai_summary=ai_summary,
-        timeline=[],
-        recommendations=[],
-        risk={},
-    ))
+    
+    # Temporary object for risk scoring
+    temp_result = type('obj', (object,), {
+        'entropy': entropy,
+        'iocs': iocs,
+        'suspicious_strings': suspicious_strings,
+        'file_type': file_type
+    })
+    
+    risk = compute_risk_score(temp_result, yara_matches)
     timeline = build_timeline(file_type, suspicious_strings, iocs)
     recommendations = build_recommendations(risk["severity"])
 
-    return AnalysisResult(
-        filename=file.filename,
-        file_type=file_type,
-        entropy=entropy,
-        hashes=hashes,
-        suspicious_strings=suspicious_strings,
-        iocs=iocs,
-        ai_summary=ai_summary,
+    # Flatten IOCs for unified model
+    flat_iocs = []
+    for k, v in iocs.items():
+        if isinstance(v, list):
+            for val in v:
+                flat_iocs.append({"type": k.rstrip('s'), "value": str(val)})
+
+    return UnifiedInvestigationResult(
+        target=file.filename,
+        type="file",
+        risk_score=risk["score"],
+        severity=risk["severity"],
+        confidence=risk["confidence"],
+        iocs=flat_iocs,
         timeline=timeline,
+        ai_explanation=ai_summary,
         recommendations=recommendations,
-        risk=risk,
+        mitre_mapping=get_mitre_mapping(suspicious_strings + yara_matches),
+        raw_artifacts={
+            "file_type": file_type,
+            "entropy": entropy,
+            "hashes": hashes,
+            "yara_matches": yara_matches
+        }
     )

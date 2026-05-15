@@ -100,10 +100,11 @@ async def analyze_file_endpoint(request: Request, file: UploadFile = File(...), 
         "file_scans",
         {
             "scan_type": "file",
-            "filename": result.filename,
-            "severity": result.risk.get("severity"),
-            "confidence": result.risk.get("confidence"),
+            "target": result.target,
+            "severity": result.severity,
+            "risk_score": result.risk_score,
             "result": result.model_dump(),
+            "created_at": datetime.utcnow().isoformat() + "Z"
         },
     )
     return result
@@ -121,8 +122,9 @@ async def generate_report_endpoint(request: Request, file: UploadFile = File(...
         {
             "report_type": "file",
             "filename": file.filename,
-            "severity": analysis.risk.get("severity"),
-            "result_summary": analysis.ai_summary[:500],
+            "severity": analysis.severity,
+            "result_summary": (analysis.ai_explanation or "")[:500],
+            "created_at": datetime.utcnow().isoformat() + "Z",
         },
     )
     pdf_stream = create_pdf_report(analysis)
@@ -142,10 +144,11 @@ async def analyze_url_endpoint(request: Request, payload: UrlAnalysisRequest, _:
             "url_scans",
             {
                 "scan_type": "url",
-                "url": payload.url,
-                "severity": result.threat_level,
-                "confidence": result.confidence,
+                "target": result.target,
+                "severity": result.severity,
+                "risk_score": result.risk_score,
                 "result": result.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z"
             },
         )
         return result
@@ -157,17 +160,19 @@ async def analyze_url_endpoint(request: Request, payload: UrlAnalysisRequest, _:
 async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
-    analysis = analyze_url(payload.url).model_dump()
+    result = analyze_url(payload.url)
     safe_insert(
         "reports",
         {
             "report_type": "url",
             "url": payload.url,
-            "severity": analysis.get("threat_level"),
-            "result_summary": str(analysis.get("threat_explanation", ""))[:500],
+            "target": result.target,
+            "severity": result.severity,
+            "result_summary": (result.ai_explanation or "")[:500],
+            "created_at": datetime.utcnow().isoformat() + "Z",
         },
     )
-    pdf_stream = create_url_pdf_report(analysis)
+    pdf_stream = create_url_pdf_report(result)
     headers = {"Content-Disposition": "attachment; filename=ghosttrace_url_report.pdf"}
     return StreamingResponse(pdf_stream, media_type="application/pdf", headers=headers)
 
@@ -176,16 +181,17 @@ async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisReq
 async def generate_log_report_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
-    analysis = analyze_log_text(payload.log_text)
+    result = analyze_log_text(payload.log_text)
     safe_insert(
         "reports",
         {
             "report_type": "log",
-            "severity": analysis.get("threat_level"),
-            "result_summary": str(analysis.get("ai_explanation", ""))[:500],
+            "severity": result.severity,
+            "result_summary": (result.ai_explanation or "")[:500],
+            "created_at": datetime.utcnow().isoformat() + "Z",
         },
     )
-    pdf_stream = create_log_pdf_report(analysis)
+    pdf_stream = create_log_pdf_report(result)
     headers = {"Content-Disposition": "attachment; filename=ghosttrace_log_report.pdf"}
     return StreamingResponse(pdf_stream, media_type="application/pdf", headers=headers)
 
@@ -199,9 +205,11 @@ async def analyze_log_endpoint(request: Request, payload: LogAnalysisRequest, _:
         "log_scans",
         {
             "scan_type": "log",
-            "severity": result.get("threat_level"),
-            "risk_score": result.get("risk_score"),
-            "result": result,
+            "target": result.target,
+            "severity": result.severity,
+            "risk_score": result.risk_score,
+            "result": result.model_dump(),
+            "created_at": datetime.utcnow().isoformat() + "Z"
         },
     )
     return result

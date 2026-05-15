@@ -80,12 +80,17 @@ def _generate_log_ai_explanation(text: str, behavior_patterns: list[str], risk_s
         )
 
 
-def analyze_log_text(log_text: str) -> dict[str, Any]:
+from app.schemas import UnifiedInvestigationResult
+
+# ... (keep internal functions)
+
+def analyze_log_text(log_text: str) -> UnifiedInvestigationResult:
     text = log_text.strip()
     ip_matches = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
     domain_matches = re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,63}\b", text)
     command_matches = re.findall(r"\b(?:powershell|cmd\.exe|bash|curl|wget)[^\r\n]*", text, flags=re.IGNORECASE)
     behavior_patterns = []
+    
     if re.search(r"failed login|authentication failure|brute", text, flags=re.IGNORECASE):
         behavior_patterns.append("Credential attack attempts")
     if re.search(r"encodedcommand|base64|invoke-expression", text, flags=re.IGNORECASE):
@@ -96,26 +101,49 @@ def analyze_log_text(log_text: str) -> dict[str, Any]:
         behavior_patterns.append("Network callback behavior")
 
     risk_score = min(100, 20 + len(ip_matches) * 4 + len(command_matches) * 7 + len(behavior_patterns) * 12)
-    threat_level = "safe"
+    threat_level = "low"
     if risk_score >= 80:
         threat_level = "critical"
     elif risk_score >= 60:
         threat_level = "high"
     elif risk_score >= 35:
-        threat_level = "suspicious"
+        threat_level = "medium"
 
-    return {
-        "iocs": {
-            "ips": sorted(set(ip_matches)),
-            "domains": sorted(set(domain_matches)),
-            "suspicious_commands": sorted(set(command_matches)),
-        },
-        "behavior_patterns": behavior_patterns or ["No high-confidence behavior patterns identified."],
-        "risk_score": risk_score,
-        "threat_level": threat_level,
-        "ai_explanation": _generate_log_ai_explanation(
-            text,
-            behavior_patterns or ["No high-confidence behavior patterns identified."],
-            risk_score,
-        ),
-    }
+    explanation = _generate_log_ai_explanation(
+        text,
+        behavior_patterns or ["No high-confidence behavior patterns identified."],
+        risk_score,
+    )
+
+    iocs = []
+    for ip in set(ip_matches): iocs.append({"type": "ip", "value": ip})
+    for dom in set(domain_matches): iocs.append({"type": "domain", "value": dom})
+    for cmd in set(command_matches): iocs.append({"type": "command", "value": cmd})
+
+    timeline = [
+        {"stage": "Log Ingestion", "details": f"Analyzed {len(text.splitlines())} log lines.", "sev": "low"},
+    ]
+    if behavior_patterns:
+        timeline.append({"stage": "Pattern Match", "details": f"Identified: {', '.join(behavior_patterns)}", "sev": "medium" if risk_score < 60 else "high"})
+    
+    timeline.append({"stage": "AI Analysis", "details": "Generated attack reconstruction from log events.", "sev": "low"})
+
+    return UnifiedInvestigationResult(
+        target="System Logs",
+        type="log",
+        risk_score=risk_score,
+        severity=threat_level,
+        confidence=min(95, 45 + len(behavior_patterns)*10),
+        iocs=iocs,
+        timeline=timeline,
+        ai_explanation=explanation,
+        recommendations=[
+            "Identify and isolate the source IP addresses detected in brute force patterns.",
+            "Review audit logs for successful logins following brute force attempts.",
+            "Rotate credentials for any accounts appearing in the log excerpt."
+        ],
+        raw_artifacts={
+            "behavior_patterns": behavior_patterns,
+            "ip_matches": list(set(ip_matches))
+        }
+    )
