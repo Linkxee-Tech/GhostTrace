@@ -3,7 +3,7 @@ import { Spinner, ThreatSeverityCard, IOCTable, Terminal, ScanProgress } from ".
 import { D_LOG, LOG_STEPS, DEMO_LOGS } from "./SOCConstants";
 import { useScan, apiJson, apiBlob, downloadBlob, reportClientError, mapLogResult } from "./SOCUtils";
 
-export function LogAnalyzer({ pendingScan, setPendingScan, onScanTrigger }) {
+export function LogAnalyzer({ pendingScan, setPendingScan, onScanTrigger, onScanComplete }) {
   const { phase, cur, done, start, reset } = useScan(LOG_STEPS);
   const [text, setText] = useState("");
   const [tab, setTab] = useState("timeline");
@@ -20,9 +20,10 @@ export function LogAnalyzer({ pendingScan, setPendingScan, onScanTrigger }) {
       try {
         const data = await apiJson("/api/analyze-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ log_text: scanText }) });
         setResult({ ...mapLogResult(data, scanText), mitre_mapping: data.mitre_mapping || [] });
+        if (typeof onScanComplete === "function") await onScanComplete();
       } catch (e) { reportClientError("Log analysis failed", e); }
     })();
-  }, [phase, scanText]);
+  }, [phase, scanText, onScanComplete]);
 
   return (
     <div className="view">

@@ -3,7 +3,7 @@ import { Spinner, Badge, ThreatSeverityCard, HealthScoreRing, IOCTable, Terminal
 import { D_URL, URL_STEPS } from "./SOCConstants";
 import { useScan, apiJson, apiBlob, downloadBlob, openBlobInNewTab, downloadJson, reportClientError, mapUrlResult } from "./SOCUtils";
 
-export function URLScanner({ pendingScan, setPendingScan, onScanTrigger }) {
+export function URLScanner({ pendingScan, setPendingScan, onScanTrigger, onScanComplete }) {
   const { phase, cur, done, start, reset } = useScan(URL_STEPS);
   const [url, setUrl] = useState("");
   const [tab, setTab] = useState("overview");
@@ -55,6 +55,7 @@ export function URLScanner({ pendingScan, setPendingScan, onScanTrigger }) {
         const data = await apiJson("/api/analyze-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: scanUrl }) });
         // Map UnifiedInvestigationResult → URLScanner display shape
         setResult({ ...mapUrlResult(data, scanUrl), mitre_mapping: data.mitre_mapping || [] });
+        if (typeof onScanComplete === "function") await onScanComplete();
       } catch (e) {
         reportClientError("URL analysis failed", e);
         const msg = e?.message || "URL analysis request failed.";
@@ -63,7 +64,7 @@ export function URLScanner({ pendingScan, setPendingScan, onScanTrigger }) {
         setLoadingResult(false);
       }
     })();
-  }, [phase, scanUrl]);
+  }, [phase, scanUrl, onScanComplete]);
 
   return (
     <div className="view">
@@ -130,7 +131,7 @@ export function URLScanner({ pendingScan, setPendingScan, onScanTrigger }) {
                 </div>
                 <div className="fac gap8">
                   <button className="btn btn-ghost" onClick={resetAll}>↩ New Scan</button>
-                  <button className="btn btn-sec" onClick={async () => { try { const blob = await apiBlob("/api/generate-url-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url }) }); openBlobInNewTab(blob); } catch (e) { reportClientError("URL report view failed", e); } }}>📄 Report</button>
+                  <button className="btn btn-sec" onClick={async () => { const newTab = window.open("", "_blank"); if (newTab) newTab.document.write("<html><body style='font-family:sans-serif;padding:20px'>Generating report... please wait.</body></html>"); try { const blob = await apiBlob("/api/generate-url-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url }) }); const url = URL.createObjectURL(blob); if (newTab) { newTab.location.href = url; } else { downloadBlob(blob, "ghosttrace_url_report.pdf"); } } catch (e) { if (newTab) newTab.close(); reportClientError("URL report view failed", e); } }}>📄 Report</button>
                   <button className="btn btn-primary" onClick={async () => { try { const blob = await apiBlob("/api/generate-url-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: r.url }) }); downloadBlob(blob, "ghosttrace_url_report.pdf"); } catch (e) { reportClientError("URL report download failed", e); } }}>⬇ PDF</button>
                 </div>
               </div>

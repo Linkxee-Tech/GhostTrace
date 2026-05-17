@@ -43,6 +43,22 @@ def test_generate_log_report():
     assert response.headers["content-type"] == "application/pdf"
 
 
+def test_report_preview_pdf():
+    response = client.post(
+        "/api/reports/preview-pdf",
+        json={
+            "name": "demo-report",
+            "report_type": "file",
+            "severity": "medium",
+            "target": "demo-target",
+            "result_summary": "demo summary",
+            "created_at": "2026-05-17T00:00:00Z",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+
+
 def test_settings_api_keys_masked_roundtrip():
     os.environ["SETTINGS_ENCRYPTION_KEY"] = "mVjvHUrhKMYLyeWEQBAaduboyrhuA8sSKPuKY_Q-uA8="
     save = client.post(

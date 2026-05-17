@@ -1,8 +1,9 @@
 import logging
 import os
-from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Request
+from fastapi import APIRouter, File, UploadFile, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from cryptography.fernet import Fernet, InvalidToken
+from pydantic import BaseModel
 from app.services.file_scanner import analyze_file
 from app.services.report_generator import create_pdf_report, create_url_pdf_report, create_log_pdf_report
 from app.services.url_analyzer import analyze_url
@@ -20,15 +21,51 @@ from app.database.repositories import (
     save_alert,
     get_alerts,
 )
-from app.schemas import UrlAnalysisRequest, LogAnalysisRequest, MonitorAddRequest, ApiKeysUpdateRequest
+from app.schemas import UrlAnalysisRequest, LogAnalysisRequest, MonitorAddRequest, ApiKeysUpdateRequest, UnifiedInvestigationResult
 from datetime import datetime
 from app.security import require_api_key, enforce_rate_limit
+from app.api.websockets import manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 MONITOR_STATE = {"watchlist": [], "alerts": [], "last_checked": {}}
 MONITOR_COOLDOWN_SECONDS = 300
 MAX_WATCHLIST = 100
+
+
+class ReportPreviewPdfRequest(BaseModel):
+    name: str | None = None
+    report_type: str | None = None
+    severity: str | None = None
+    target: str | None = None
+    result_summary: str | None = None
+    created_at: str | None = None
+
+
+def _preview_unified_result(
+    name: str | None = None,
+    report_type: str | None = None,
+    severity: str | None = None,
+    target: str | None = None,
+    result_summary: str | None = None,
+    created_at: str | None = None,
+) -> UnifiedInvestigationResult:
+    r_type = str(report_type or "report").lower()
+    r_target = str(target or name or "GhostTrace Report")
+    r_severity = str(severity or "medium").lower()
+    r_summary = str(result_summary or "Summary details exported from report archive.")
+    r_meta = str(created_at or datetime.utcnow().isoformat() + "Z")
+    return UnifiedInvestigationResult(
+        target=r_target,
+        type=r_type if r_type in {"file", "url", "log"} else "report",
+        risk_score=0,
+        severity=r_severity if r_severity in {"low", "medium", "high", "critical", "clean"} else "medium",
+        confidence=50,
+        iocs=[],
+        timeline=[{"stage": "Record Snapshot", "details": f"Archive metadata captured at {r_meta}", "sev": "low"}],
+        ai_explanation=f"Archive Summary: {r_summary}",
+        recommendations=["Run a fresh scan to generate a full evidence-backed forensic report."],
+    )
 
 
 def _mask_secret(value: str) -> str:
@@ -90,23 +127,48 @@ def _hydrate_runtime_keys_from_latest_settings() -> None:
 
 
 @router.post("/analyze-file")
-async def analyze_file_endpoint(request: Request, file: UploadFile = File(...), _: None = Depends(require_api_key)):
+async def analyze_file_endpoint(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...), _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
+    _hydrate_runtime_keys_from_latest_settings()
     if not file.filename:
         raise HTTPException(status_code=400, detail="A valid file must be uploaded.")
 
     result = await analyze_file(file)
-    safe_insert(
-        "file_scans",
-        {
-            "scan_type": "file",
-            "target": result.target,
-            "severity": result.severity,
-            "risk_score": result.risk_score,
-            "result": result.model_dump(),
-            "created_at": datetime.utcnow().isoformat() + "Z"
-        },
-    )
+    
+    def post_analysis_task(res):
+        safe_insert(
+            "file_scans",
+            {
+                "scan_type": "file",
+                "target": res.target,
+                "severity": res.severity,
+                "risk_score": res.risk_score,
+                "result": res.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z"
+            },
+        )
+        safe_insert(
+            "reports",
+            {
+                "report_type": "file",
+                "filename": file.filename,
+                "target": res.target,
+                "severity": res.severity,
+                "result_summary": (res.ai_explanation or "")[:500],
+                "result": res.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z",
+            },
+        )
+        import asyncio
+        asyncio.run(manager.broadcast({
+            "event": "new_threat",
+            "type": "file",
+            "target": res.target,
+            "severity": res.severity,
+            "message": "File analysis completed."
+        }))
+
+    background_tasks.add_task(post_analysis_task, result)
     return result
 
 
@@ -122,8 +184,10 @@ async def generate_report_endpoint(request: Request, file: UploadFile = File(...
         {
             "report_type": "file",
             "filename": file.filename,
+            "target": analysis.target,
             "severity": analysis.severity,
             "result_summary": (analysis.ai_explanation or "")[:500],
+            "result": analysis.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
     )
@@ -135,29 +199,53 @@ async def generate_report_endpoint(request: Request, file: UploadFile = File(...
 
 
 @router.post("/analyze-url")
-async def analyze_url_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
+def analyze_url_endpoint(request: Request, background_tasks: BackgroundTasks, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
     try:
         result = analyze_url(payload.url)
-        safe_insert(
-            "url_scans",
-            {
-                "scan_type": "url",
-                "target": result.target,
-                "severity": result.severity,
-                "risk_score": result.risk_score,
-                "result": result.model_dump(),
-                "created_at": datetime.utcnow().isoformat() + "Z"
-            },
-        )
+        
+        def post_analysis_task(res, p_url):
+            safe_insert(
+                "url_scans",
+                {
+                    "scan_type": "url",
+                    "target": res.target,
+                    "severity": res.severity,
+                    "risk_score": res.risk_score,
+                    "result": res.model_dump(),
+                    "created_at": datetime.utcnow().isoformat() + "Z"
+                },
+            )
+            safe_insert(
+                "reports",
+                {
+                    "report_type": "url",
+                    "url": p_url,
+                    "target": res.target,
+                    "severity": res.severity,
+                    "result_summary": (res.ai_explanation or "")[:500],
+                    "result": res.model_dump(),
+                    "created_at": datetime.utcnow().isoformat() + "Z",
+                },
+            )
+            import asyncio
+            asyncio.run(manager.broadcast({
+                "event": "new_threat",
+                "type": "url",
+                "target": res.target,
+                "severity": res.severity,
+                "message": "URL analysis completed."
+            }))
+
+        background_tasks.add_task(post_analysis_task, result, payload.url)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/generate-url-report")
-async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
+def generate_url_report_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
     result = analyze_url(payload.url)
@@ -169,6 +257,7 @@ async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisReq
             "target": result.target,
             "severity": result.severity,
             "result_summary": (result.ai_explanation or "")[:500],
+            "result": result.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
     )
@@ -178,7 +267,7 @@ async def generate_url_report_endpoint(request: Request, payload: UrlAnalysisReq
 
 
 @router.post("/generate-log-report")
-async def generate_log_report_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
+def generate_log_report_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
     result = analyze_log_text(payload.log_text)
@@ -186,8 +275,10 @@ async def generate_log_report_endpoint(request: Request, payload: LogAnalysisReq
         "reports",
         {
             "report_type": "log",
+            "target": result.target,
             "severity": result.severity,
             "result_summary": (result.ai_explanation or "")[:500],
+            "result": result.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
     )
@@ -197,21 +288,44 @@ async def generate_log_report_endpoint(request: Request, payload: LogAnalysisReq
 
 
 @router.post("/analyze-log")
-async def analyze_log_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
+def analyze_log_endpoint(request: Request, background_tasks: BackgroundTasks, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
     result = analyze_log_text(payload.log_text)
-    safe_insert(
-        "log_scans",
-        {
-            "scan_type": "log",
-            "target": result.target,
-            "severity": result.severity,
-            "risk_score": result.risk_score,
-            "result": result.model_dump(),
-            "created_at": datetime.utcnow().isoformat() + "Z"
-        },
-    )
+
+    def post_analysis_task(res):
+        safe_insert(
+            "log_scans",
+            {
+                "scan_type": "log",
+                "target": res.target,
+                "severity": res.severity,
+                "risk_score": res.risk_score,
+                "result": res.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z"
+            },
+        )
+        safe_insert(
+            "reports",
+            {
+                "report_type": "log",
+                "target": res.target,
+                "severity": res.severity,
+                "result_summary": (res.ai_explanation or "")[:500],
+                "result": res.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z",
+            },
+        )
+        import asyncio
+        asyncio.run(manager.broadcast({
+            "event": "new_threat",
+            "type": "log",
+            "target": res.target,
+            "severity": res.severity,
+            "message": "Log analysis completed."
+        }))
+
+    background_tasks.add_task(post_analysis_task, result)
     return result
 
 
@@ -353,6 +467,82 @@ async def history_logs_endpoint(
 @router.get("/reports")
 async def reports_history_endpoint(limit: int = 50, _: None = Depends(require_api_key)):
     return {"items": safe_list("reports", limit=limit)}
+
+
+@router.get("/reports/{report_id}/pdf")
+async def report_pdf_by_id_endpoint(report_id: str, _: None = Depends(require_api_key)):
+    report = safe_get_by_id("reports", report_id)
+    if not report:
+        # Fallback path for environments where ObjectId lookup is unavailable.
+        # This keeps report viewing functional as long as the report appears in recent history.
+        for item in safe_list("reports", limit=500):
+            if str(item.get("id")) == str(report_id):
+                report = item
+                break
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    # Preferred path: render from the stored unified investigation payload.
+    stored_result = report.get("result")
+    if isinstance(stored_result, dict):
+        try:
+            unified = UnifiedInvestigationResult(**stored_result)
+            pdf_stream = create_pdf_report(unified)
+            headers = {
+                "Content-Disposition": f"attachment; filename=ghosttrace_report_{report_id}.pdf"
+            }
+            return StreamingResponse(pdf_stream, media_type="application/pdf", headers=headers)
+        except Exception as exc:
+            logger.warning("Failed to render stored report %s: %s", report_id, exc)
+
+    # Fast fallback: generate a lightweight preview PDF from archived metadata only.
+    preview = _preview_unified_result(
+        name=report.get("filename") or report.get("target") or report.get("url"),
+        report_type=report.get("report_type"),
+        severity=report.get("severity"),
+        target=report.get("target") or report.get("url") or report.get("filename"),
+        result_summary=report.get("result_summary"),
+        created_at=report.get("created_at"),
+    )
+    pdf_stream = create_pdf_report(preview)
+    headers = {"Content-Disposition": f"attachment; filename=ghosttrace_report_{report_id}.pdf"}
+    return StreamingResponse(pdf_stream, media_type="application/pdf", headers=headers)
+
+
+@router.post("/reports/preview-pdf")
+async def report_preview_pdf_endpoint(payload: ReportPreviewPdfRequest, _: None = Depends(require_api_key)):
+    unified = _preview_unified_result(
+        name=payload.name,
+        report_type=payload.report_type,
+        severity=payload.severity,
+        target=payload.target,
+        result_summary=payload.result_summary,
+        created_at=payload.created_at,
+    )
+    pdf_stream = create_pdf_report(unified)
+    headers = {"Content-Disposition": "attachment; filename=ghosttrace_report_preview.pdf"}
+    return StreamingResponse(pdf_stream, media_type="application/pdf", headers=headers)
+
+
+@router.get("/reports/preview-pdf")
+async def report_preview_pdf_get_endpoint(
+    name: str | None = None,
+    report_type: str | None = None,
+    severity: str | None = None,
+    target: str | None = None,
+    result_summary: str | None = None,
+    created_at: str | None = None,
+    _: None = Depends(require_api_key),
+):
+    payload = ReportPreviewPdfRequest(
+        name=name,
+        report_type=report_type,
+        severity=severity,
+        target=target,
+        result_summary=result_summary,
+        created_at=created_at,
+    )
+    return await report_preview_pdf_endpoint(payload, _)
 
 
 @router.post("/settings/api-keys")

@@ -157,7 +157,7 @@ export function mapFileResult(data, fallback = {}) {
     strings: suspiciousStrings.length ? suspiciousStrings : (fallback.strings || []),
     iocs: iocDict,
     risk: Number(data.risk_score ?? fallback.risk ?? 0),
-    level: String(data.severity || "low").toUpperCase(),
+    level: normalizeLevel(data.severity || "low"),
     confidence: Number(data.confidence ?? 0),
     mitre_mapping: data.mitre_mapping || [],
     ai: data.ai_explanation || fallback.ai || "No AI explanation available.",
@@ -171,7 +171,7 @@ export function mapFileResult(data, fallback = {}) {
  * into the shape that URLScanner.jsx expects.
  */
 export function mapUrlResult(data, scanUrl) {
-  if (!data || !data.risk_score === undefined) {
+  if (!data || data.risk_score === undefined) {
     // Minimal safe fallback if called with empty data for pre-scan state
     return {
       url: scanUrl || "",
@@ -363,7 +363,7 @@ export function mapLogResult(data, scanText = "") {
     critical: String(data.severity || "").toLowerCase() === "critical" ? Math.max(1, suspicious) : Math.min(suspicious, 2),
     anomalies: suspicious,
     risk: Number(data.risk_score ?? D_LOG.risk),
-    level: String(data.severity || "high").toUpperCase(),
+    level: normalizeLevel(data.severity || "high"),
     confidence: Number(data.confidence ?? 0),
     iocs: iocDict,
     ai: data.ai_explanation || D_LOG.ai,

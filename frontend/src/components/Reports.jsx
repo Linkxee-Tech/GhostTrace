@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Badge } from "./SOCLibrary";
-import { apiBlob, downloadBlob, downloadJson, reportClientError } from "./SOCUtils";
+import { apiBlob, downloadBlob, downloadJson, openBlobInNewTab, reportClientError } from "./SOCUtils";
 
 const TYPE_ICON = { file: "📁", url: "🌐", log: "📋" };
 const TYPE_BG   = {
@@ -12,7 +12,7 @@ const TYPE_BG   = {
 
 function normalizeReportItem(r, i) {
   // Accepts both legacy static shape AND real DB document shape
-  if (r.name && r.meta) return r; // already in display shape
+  if (r.name && r.meta) return { ...r, sourceId: r.id || null }; // already in display shape
   const type = String(r.report_type || r.type || "file").toLowerCase();
   const severity = String(r.severity || r.level || "unknown").toLowerCase();
   const target = r.filename || r.url || r.target || `Scan #${i + 1}`;
@@ -27,6 +27,7 @@ function normalizeReportItem(r, i) {
     level: severity,
     sourceType: type,
     sourceTarget: r.url || r.target || r.filename || "",
+    sourceId: r.id || null,
     id: r.id || String(i),
   };
 }
@@ -46,6 +47,53 @@ export function Reports({ reportsData = null, setView }) {
   const [q, setQ] = useState("");
   const [filterLevel, setFilterLevel] = useState("all");
   const [downloading, setDownloading] = useState(null);
+  const [pdfError, setPdfError] = useState("");
+
+  const openInlinePreview = (r) => {
+    const level = String(r.level || "unknown").toUpperCase();
+    const type = String(r.sourceType || "report").toUpperCase();
+    const name = String(r.name || "GhostTrace Report");
+    const meta = String(r.meta || "Generated report metadata unavailable.");
+    const size = String(r.sz || "N/A");
+    const safe = (v) => String(v)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GhostTrace Report Preview</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; background:#0b0f14; color:#d9e2ec; margin:0; padding:24px; }
+    .card { max-width:880px; margin:0 auto; background:#111821; border:1px solid #223142; border-radius:12px; padding:20px; }
+    .h { color:#37e8ff; font-weight:700; font-size:20px; margin-bottom:8px; }
+    .sub { color:#8ca1b6; margin-bottom:18px; }
+    .row { margin:8px 0; }
+    .k { color:#8ca1b6; display:inline-block; min-width:90px; }
+    .v { color:#e8edf5; font-weight:600; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#19304a; color:#7ed5ff; font-size:12px; }
+    .wm { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.08; font-size:72px; font-weight:800; color:#00ff88; }
+  </style>
+</head>
+<body>
+  <div class="wm">GHOSTTRACE</div>
+  <div class="card">
+    <div class="h">Report Preview</div>
+    <div class="sub">Quick report preview: this view presents the record summary (name, type, severity, metadata, and size) for rapid review.</div>
+    <div class="row"><span class="k">Name:</span> <span class="v">${safe(name)}</span></div>
+    <div class="row"><span class="k">Type:</span> <span class="badge">${safe(type)}</span></div>
+    <div class="row"><span class="k">Severity:</span> <span class="badge">${safe(level)}</span></div>
+    <div class="row"><span class="k">Metadata:</span> <span class="v">${safe(meta)}</span></div>
+    <div class="row"><span class="k">Size/Summary:</span> <span class="v">${safe(size)}</span></div>
+  </div>
+</body>
+</html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
 
   const filtered = allReports.filter((r) => {
     const txt = `${r.name} ${r.meta}`.toLowerCase();
@@ -63,33 +111,57 @@ export function Reports({ reportsData = null, setView }) {
 
   const handlePdfDownload = async (r, i) => {
     setDownloading(i);
+    setPdfError("");
     try {
-      const type = String(r.sourceType || "file").toLowerCase();
-      if (type === "url" && r.sourceTarget) {
-        const blob = await apiBlob("/api/generate-url-report", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: r.sourceTarget }),
-        });
-        downloadBlob(blob, `ghosttrace_url_report_${Date.now()}.pdf`);
-      } else if (type === "log" || !r.sourceTarget) {
-        // Export JSON for log or unknown — PDF requires the log text which we don't have here
-        downloadJson(r, `ghosttrace_report_${i + 1}.json`);
-      } else {
-        downloadJson(r, `ghosttrace_report_${i + 1}.json`);
+      if (r.sourceId) {
+        const blob = await apiBlob(`/api/reports/${encodeURIComponent(r.sourceId)}/pdf`);
+        downloadBlob(blob, `ghosttrace_report_${r.sourceId}.pdf`);
+        return;
       }
+      const blob = await apiBlob("/api/reports/preview-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: r.name,
+          report_type: r.sourceType,
+          severity: r.level,
+          target: r.sourceTarget || r.name,
+          result_summary: r.sz,
+          created_at: r.meta,
+        }),
+      });
+      downloadBlob(blob, `ghosttrace_report_${Date.now()}.pdf`);
     } catch (e) {
       reportClientError("PDF download failed", e);
+      setPdfError("PDF generation failed from backend. A JSON export was downloaded as fallback.");
+      downloadJson(r, `ghosttrace_report_${i + 1}.json`);
     } finally {
       setDownloading(null);
     }
   };
 
-  const handleView = (r) => {
+  const handleView = async (r) => {
     const t = String(r.sourceType || "").toLowerCase();
-    if (t === "url") setView("url-scan");
-    else if (t === "log") setView("log-scan");
-    else setView("file-scan");
+    try {
+      if (r.sourceId) {
+        const blob = await apiBlob(`/api/reports/${encodeURIComponent(r.sourceId)}/pdf`);
+        openBlobInNewTab(blob);
+        return;
+      }
+      if (t === "url" && r.sourceTarget) {
+        const blob = await apiBlob("/api/generate-url-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: r.sourceTarget }),
+        });
+        openBlobInNewTab(blob);
+        return;
+      }
+      openInlinePreview(r);
+    } catch (e) {
+      reportClientError("Report view failed", e);
+      openInlinePreview(r);
+    }
   };
 
   const LEVELS = ["all","critical","high","medium","low","clean"];
@@ -106,6 +178,7 @@ export function Reports({ reportsData = null, setView }) {
           <button className="btn btn-primary" onClick={() => setView("file-scan")}>+ New Scan</button>
         </div>
       </div>
+      {pdfError && <div className="warn-box mb12">{pdfError}</div>}
 
       {/* Stats */}
       <div className="g3 mb16">

@@ -6,6 +6,7 @@ import uuid
 import os
 from dotenv import load_dotenv
 from app.api.routes import router
+from app.api.websockets import ws_router
 
 load_dotenv()
 
@@ -16,6 +17,18 @@ class TraceIDMiddleware(BaseHTTPMiddleware):
         request.state.trace_id = trace_id
         response = await call_next(request)
         response.headers["x-trace-id"] = trace_id
+        return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
 app = FastAPI(
@@ -38,8 +51,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(TraceIDMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(router, prefix="/api")
+app.include_router(ws_router, prefix="/api")
 
 
 @app.get("/health")

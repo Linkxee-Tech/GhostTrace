@@ -11,18 +11,21 @@ describe("GhostTraceApp", () => {
   });
 
   it("contains scanner endpoint wiring in source", () => {
-    const src = readFileSync(resolve(process.cwd(), "src/GhostTrace.jsx"), "utf8");
-    expect(src).toContain("/api/analyze-file");
-    expect(src).toContain("/api/generate-report");
-    expect(src).toContain("/api/analyze-url");
-    expect(src).toContain("/api/generate-url-report");
-    expect(src).toContain("/api/analyze-log");
-    expect(src).toContain("/api/generate-log-report");
+    const fileScannerSrc = readFileSync(resolve(process.cwd(), "src/components/FileScanner.jsx"), "utf8");
+    const urlScannerSrc = readFileSync(resolve(process.cwd(), "src/components/URLScanner.jsx"), "utf8");
+    const logAnalyzerSrc = readFileSync(resolve(process.cwd(), "src/components/LogAnalyzer.jsx"), "utf8");
+    expect(fileScannerSrc).toContain("/api/analyze-file");
+    expect(fileScannerSrc).toContain("/api/generate-report");
+    expect(urlScannerSrc).toContain("/api/analyze-url");
+    expect(urlScannerSrc).toContain("/api/generate-url-report");
+    expect(logAnalyzerSrc).toContain("/api/analyze-log");
+    expect(logAnalyzerSrc).toContain("/api/generate-log-report");
   });
 
   it("keeps fallback/static paths for non-connected pages visible", () => {
-    const src = readFileSync(resolve(process.cwd(), "src/GhostTrace.jsx"), "utf8");
-    expect(src).toContain("const HISTORY = [");
-    expect(src).toContain("function Reports({ reportsData = null, setView })");
+    const constantsSrc = readFileSync(resolve(process.cwd(), "src/components/SOCConstants.js"), "utf8");
+    const reportsSrc = readFileSync(resolve(process.cwd(), "src/components/Reports.jsx"), "utf8");
+    expect(constantsSrc).toContain("export const HISTORY = [");
+    expect(reportsSrc).toContain("function Reports({ reportsData = null, setView })");
   });
 });

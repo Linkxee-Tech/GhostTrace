@@ -178,6 +178,11 @@ export const NAV = [
     { id:"reports",  icon:"📑", label:"Reports", badge:"6" },
     { id:"settings", icon:"⚙️",  label:"Settings" },
   ]},
+  { section:"Company", items:[
+    { id:"about",   icon:"ℹ️", label:"About GhostTrace" },
+    { id:"privacy", icon:"🔒", label:"Privacy Policy" },
+    { id:"terms",   icon:"📜", label:"Terms of Service" },
+  ]},
 ];
 
 export const TITLES = {
@@ -191,6 +196,9 @@ export const TITLES = {
   intel:"Threat Intelligence",
   reports:"Reports",
   settings:"Settings",
+  about:"About GhostTrace",
+  privacy:"Privacy Policy",
+  terms:"Terms of Service",
 };
 
 export const API_STORAGE_KEY = "ghosttrace.settings.apiKeys.v1";

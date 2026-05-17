@@ -14,6 +14,9 @@ import { AttackTimeline } from "./components/AttackTimeline";
 import { ThreatIntel } from "./components/ThreatIntel";
 import { Reports } from "./components/Reports";
 import { Settings } from "./components/Settings";
+import { About } from "./components/About";
+import { Privacy } from "./components/Privacy";
+import { Terms } from "./components/Terms";
 
 // Utils & Constants
 import { HISTORY, API_STORAGE_KEY } from "./components/SOCConstants";
@@ -41,6 +44,28 @@ export default function GhostTrace() {
     if (t === "url" || t === "ip" || t === "domain") setView("url-scan");
     else if (t === "file" || t === "hash" || t === "md5" || t === "sha256") setView("file-scan");
     else if (t === "log") setView("log-scan");
+  };
+
+  const refreshHistoryAndReports = async () => {
+    const [files, urls, logs, reports] = await Promise.allSettled([
+      apiJson("/api/history/files?limit=200"),
+      apiJson("/api/history/urls?limit=200"),
+      apiJson("/api/history/logs?limit=200"),
+      apiJson("/api/reports?limit=200"),
+    ]);
+
+    const filesVal = files.status === "fulfilled" ? files.value : null;
+    const urlsVal = urls.status === "fulfilled" ? urls.value : null;
+    const logsVal = logs.status === "fulfilled" ? logs.value : null;
+    const reportsVal = reports.status === "fulfilled" ? reports.value : null;
+
+    const fileItems = (filesVal?.items || []).map((d) => mapHistoryItem(d, "file"));
+    const urlItems = (urlsVal?.items || []).map((d) => mapHistoryItem(d, "url"));
+    const logItems = (logsVal?.items || []).map((d) => mapHistoryItem(d, "log"));
+    const merged = [...fileItems, ...urlItems, ...logItems].sort((a, b) => b.ts - a.ts);
+    if (merged.length) setHistoryItems(merged);
+    const reportItems = reportsVal?.items || [];
+    if (reportItems.length) setReportsData(reportItems);
   };
 
   useEffect(() => {
@@ -141,18 +166,21 @@ export default function GhostTrace() {
     <div className="gt">
       <Sidebar view={view} setView={setView} backendStatus={backendStatus} />
       <div className="gt-main">
-        <Topbar view={view} backendStatus={backendStatus} />
+        <Topbar view={view} backendStatus={backendStatus} historyItems={historyItems} />
         <div className="gt-scroll">
           {view === "dashboard" && <Dashboard setView={setView} historyItems={historyItems} reportsData={reportsData} backendStatus={backendStatus} />}
           {view === "history"   && <ScanHistory setView={setView} historyItems={historyItems} />}
-          {view === "file-scan" && <FileScanner pendingScan={pendingScan} setPendingScan={setPendingScan} onScanTrigger={triggerScan} />}
-          {view === "url-scan"  && <URLScanner pendingScan={pendingScan} setPendingScan={setPendingScan} onScanTrigger={triggerScan} />}
-          {view === "log-scan"  && <LogAnalyzer pendingScan={pendingScan} setPendingScan={setPendingScan} onScanTrigger={triggerScan} />}
+          {view === "file-scan" && <FileScanner pendingScan={pendingScan} setPendingScan={setPendingScan} onScanTrigger={triggerScan} onScanComplete={refreshHistoryAndReports} />}
+          {view === "url-scan"  && <URLScanner pendingScan={pendingScan} setPendingScan={setPendingScan} onScanTrigger={triggerScan} onScanComplete={refreshHistoryAndReports} />}
+          {view === "log-scan"  && <LogAnalyzer pendingScan={pendingScan} setPendingScan={setPendingScan} onScanTrigger={triggerScan} onScanComplete={refreshHistoryAndReports} />}
           {view === "ioc"       && <IOCExtractor onScanTrigger={triggerScan} />}
           {view === "timeline"  && <AttackTimeline historyItems={historyItems} backendStatus={backendStatus} />}
           {view === "intel"     && <ThreatIntel backendStatus={backendStatus} historyItems={historyItems} onScanTrigger={triggerScan} />}
           {view === "reports"   && <Reports reportsData={reportsData} setView={setView} />}
           {view === "settings"  && <Settings backendStatus={backendStatus} />}
+          {view === "about"     && <About />}
+          {view === "privacy"   && <Privacy />}
+          {view === "terms"     && <Terms />}
         </div>
       </div>
     </div>

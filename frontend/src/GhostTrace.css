@@ -469,3 +469,177 @@ html,body,#root{background:var(--void);color:var(--t1);height:100%;overflow:hidd
   .inv-workflow{gap:2px}
   .inv-step-label{display:none}
 }
+
+/* ═══════════════════════════════════════════════════
+   PREMIUM UPGRADE LAYER
+═══════════════════════════════════════════════════ */
+
+/* ── Shimmer skeleton ── */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,.04) 25%, rgba(255,255,255,.08) 50%, rgba(255,255,255,.04) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 4px;
+}
+.loading-pulse { animation: pulse 1.5s infinite ease-in-out; }
+
+/* ── Hero panel ── */
+.hero-panel {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, rgba(0,212,255,.06) 0%, rgba(0,255,136,.04) 50%, rgba(139,92,246,.05) 100%);
+  border: 1px solid rgba(0,212,255,.18);
+  border-radius: 12px;
+  padding: 28px;
+}
+.hero-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(0,255,136,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,136,.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+}
+
+/* ── Notification overlay close backdrop ── */
+.notif-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 990;
+}
+
+/* ── Topbar search glow ── */
+.topbar-search-active {
+  border-color: rgba(59,130,246,.5) !important;
+  box-shadow: 0 0 20px rgba(59,130,246,.15) !important;
+}
+
+/* ── Feat card hover upgrade ── */
+.feat-card {
+  cursor: default;
+  transition: all .18s ease;
+}
+.feat-card:hover {
+  border-color: rgba(0,212,255,.25);
+  background: var(--card2);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0,0,0,.3);
+}
+
+/* ── Animated threat ring container ── */
+.threat-ring-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Staggered fade for table rows ── */
+@keyframes rowFade {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+.tbl tbody tr {
+  animation: rowFade .2s ease both;
+}
+
+/* ── Alert badge on sidebar ── */
+.sb-alert-badge {
+  background: rgba(255,45,85,.14);
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: 8.5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,45,85,.3);
+  flex-shrink: 0;
+}
+
+/* ── WS status dot ── */
+.ws-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: all .3s;
+}
+.ws-dot.on {
+  background: var(--cyan);
+  box-shadow: 0 0 5px var(--cyan);
+}
+.ws-dot.off {
+  background: rgba(255,255,255,.2);
+}
+
+/* ── Threat intelligence ring label ── */
+.ring-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-align: center;
+}
+
+/* ── Quick launch shortcut key hint ── */
+.key-hint {
+  display: inline-block;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  padding: 1px 5px;
+  color: var(--t3);
+  vertical-align: middle;
+}
+
+/* ── Stat card premium hover ── */
+.stat:hover::after {
+  opacity: 1;
+  height: 3px;
+}
+.stat {
+  transition: all .2s ease;
+}
+.stat:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+
+/* ── Section divider ── */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+  margin: 20px 0;
+}
+
+/* ── SOC Role badge ── */
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  background: rgba(139,92,246,.1);
+  border: 1px solid rgba(139,92,246,.25);
+  border-radius: 20px;
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--purple);
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+
+/* ── Intelligence flow arrow ── */
+.intel-arrow {
+  color: var(--t3);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+

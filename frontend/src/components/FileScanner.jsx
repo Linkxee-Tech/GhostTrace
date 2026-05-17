@@ -3,7 +3,7 @@ import { Spinner, Badge, ThreatSeverityCard, MITREBoard, EntropyBar, IOCTable, T
 import { D_FILE, FILE_STEPS } from "./SOCConstants";
 import { useScan, apiJson, apiBlob, downloadBlob, openBlobInNewTab, downloadJson, reportClientError, mapFileResult } from "./SOCUtils";
 
-export function FileScanner({ pendingScan, setPendingScan, onScanTrigger }) {
+export function FileScanner({ pendingScan, setPendingScan, onScanTrigger, onScanComplete }) {
   const { phase, cur, done, start, reset } = useScan(FILE_STEPS);
   const [fname, setFname] = useState("");
   const [tab, setTab] = useState("overview");
@@ -33,6 +33,66 @@ export function FileScanner({ pendingScan, setPendingScan, onScanTrigger }) {
 
   const resetAll = () => { reset(); setFname(""); setTab("overview"); setDrag(false); setSelectedFile(null); setResult(D_FILE); };
 
+  const handleViewReport = async () => {
+    const newTab = window.open("", "_blank");
+    if (newTab) newTab.document.write("<html><body style='font-family:sans-serif;padding:20px'>Generating report... please wait.</body></html>");
+    try {
+      let blob;
+      if (selectedFile) {
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        blob = await apiBlob("/api/generate-report", { method: "POST", body: fd });
+      } else {
+        blob = await apiBlob("/api/reports/preview-pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: r.filename || fname || "File scan",
+            report_type: "file",
+            severity: String(r.level || "medium").toLowerCase(),
+            target: r.filename || fname || "File scan",
+            result_summary: `Risk ${r.risk || 0}/100 · VT ${r.vt_ratio || "N/A"} · ${r.type || "Unknown type"}`,
+            created_at: new Date().toISOString(),
+          }),
+        });
+      }
+      const url = URL.createObjectURL(blob);
+      if (newTab) {
+        newTab.location.href = url;
+      } else {
+        downloadBlob(blob, `ghosttrace_report_${Date.now()}.pdf`);
+      }
+    } catch (e) { 
+      if (newTab) newTab.close();
+      reportClientError("File report view failed", e); 
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    try {
+      if (selectedFile) {
+        const fd = new FormData();
+        fd.append("file", selectedFile);
+        const blob = await apiBlob("/api/generate-report", { method: "POST", body: fd });
+        downloadBlob(blob, `ghosttrace_report_${selectedFile.name}.pdf`);
+        return;
+      }
+      const blob = await apiBlob("/api/reports/preview-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: r.filename || fname || "File scan",
+          report_type: "file",
+          severity: String(r.level || "medium").toLowerCase(),
+          target: r.filename || fname || "File scan",
+          result_summary: `Risk ${r.risk || 0}/100 · VT ${r.vt_ratio || "N/A"} · ${r.type || "Unknown type"}`,
+          created_at: new Date().toISOString(),
+        }),
+      });
+      downloadBlob(blob, `ghosttrace_report_${Date.now()}.pdf`);
+    } catch (e) { reportClientError("File report download failed", e); }
+  };
+
   useEffect(() => {
     if (phase !== "done" || !selectedFile) return;
     (async () => {
@@ -43,12 +103,13 @@ export function FileScanner({ pendingScan, setPendingScan, onScanTrigger }) {
         // Map UnifiedInvestigationResult → FileScanner display shape
         const mapped = mapFileResult(data, D_FILE);
         setResult({ ...D_FILE, ...mapped });
+        if (typeof onScanComplete === "function") await onScanComplete();
       } catch (e) {
         reportClientError("File analysis failed", e);
         setResult((prev) => ({ ...prev, filename: selectedFile.name }));
       }
     })();
-  }, [phase, selectedFile]);
+  }, [phase, selectedFile, onScanComplete]);
 
   return (
     <div className="view">
@@ -106,8 +167,8 @@ export function FileScanner({ pendingScan, setPendingScan, onScanTrigger }) {
             </div>
             <div className="fac gap8">
               <button className="btn btn-ghost" onClick={resetAll}>↩ New Scan</button>
-              <button className="btn btn-sec" onClick={async () => { if (!selectedFile) return; try { const fd = new FormData(); fd.append("file", selectedFile); const blob = await apiBlob("/api/generate-report", { method: "POST", body: fd }); openBlobInNewTab(blob); } catch (e) { reportClientError("File report view failed", e); } }}>📄 View Report</button>
-              <button className="btn btn-primary" onClick={async () => { if (!selectedFile) return; try { const fd = new FormData(); fd.append("file", selectedFile); const blob = await apiBlob("/api/generate-report", { method: "POST", body: fd }); downloadBlob(blob, `ghosttrace_report_${selectedFile.name}.pdf`); } catch (e) { reportClientError("File report download failed", e); } }}>⬇ Download PDF</button>
+              <button className="btn btn-sec" onClick={handleViewReport}>📄 View Report</button>
+              <button className="btn btn-primary" onClick={handleDownloadPdf}>⬇ Download PDF</button>
             </div>
           </div>
 

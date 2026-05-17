@@ -1,34 +1,61 @@
 from io import BytesIO
 from datetime import datetime
+from pathlib import Path
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.lib.utils import ImageReader
 from app.schemas import UnifiedInvestigationResult
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_WATERMARK_PATH = _REPO_ROOT / "ghosttrace_logo.png"
+
+
+def _draw_watermark(canvas, doc):
+    """Render GhostTrace logo watermark on every report page."""
+    if not _WATERMARK_PATH.exists():
+        return
+    try:
+        img = ImageReader(str(_WATERMARK_PATH))
+        page_w, page_h = letter
+        wm_w = 4.2 * inch
+        wm_h = 4.2 * inch
+        x = (page_w - wm_w) / 2
+        y = (page_h - wm_h) / 2
+        canvas.saveState()
+        # Very low opacity keeps report text readable while branding each page.
+        canvas.setFillAlpha(0.07)
+        canvas.drawImage(img, x, y, width=wm_w, height=wm_h, preserveAspectRatio=True, mask="auto")
+        canvas.restoreState()
+    except Exception:
+        # Watermark errors should never block report generation.
+        pass
 
 
 def _sev_color(severity: str):
     s = (severity or "").lower()
-    if s == "critical": return colors.HexColor("#ff2d55")
-    if s == "high":     return colors.HexColor("#ffaa00")
-    if s == "medium":   return colors.HexColor("#3b82f6")
-    if s in ("low", "clean"): return colors.HexColor("#00ff88")
-    return colors.HexColor("#8e8e93")
+    if s == "critical": return colors.HexColor("#dc2626")  # red-600
+    if s == "high":     return colors.HexColor("#ea580c")  # orange-600
+    if s == "medium":   return colors.HexColor("#2563eb")  # blue-600
+    if s in ("low", "clean"): return colors.HexColor("#16a34a")  # green-600
+    return colors.HexColor("#6b7280")  # gray-500
 
 
 def _build_styles() -> dict:
     styles = getSampleStyleSheet()
     defs = [
-        ParagraphStyle("GT_Title",  parent=styles["Title"],    fontSize=22, textColor=colors.HexColor("#00ff88"), spaceAfter=6),
-        ParagraphStyle("GT_Sub",    parent=styles["Normal"],   fontSize=11, textColor=colors.HexColor("#8e8e93"), spaceAfter=10),
-        ParagraphStyle("GT_Header", parent=styles["Heading2"], fontSize=12, textColor=colors.HexColor("#00d4ff"),
-                       backColor=colors.HexColor("#0c1018"), borderPadding=5, spaceBefore=14, spaceAfter=8),
-        ParagraphStyle("GT_Label",  parent=styles["Normal"],   fontSize=9,  textColor=colors.HexColor("#7a8fa8"), fontName="Helvetica-Bold"),
-        ParagraphStyle("GT_Value",  parent=styles["Normal"],   fontSize=9,  textColor=colors.HexColor("#e8edf5")),
-        ParagraphStyle("GT_Body",   parent=styles["Normal"],   fontSize=9,  leading=14, textColor=colors.HexColor("#e8edf5")),
-        ParagraphStyle("GT_Mono",   parent=styles["Normal"],   fontSize=8,  leading=13, fontName="Courier", textColor=colors.HexColor("#8fb08c")),
-        ParagraphStyle("GT_Footer", parent=styles["Normal"],   fontSize=7,  textColor=colors.HexColor("#3d5068"), alignment=1),
+        ParagraphStyle("GT_Title",  parent=styles["Title"],    fontSize=22, textColor=colors.HexColor("#111827"), spaceAfter=6),
+        ParagraphStyle("GT_Sub",    parent=styles["Normal"],   fontSize=11, textColor=colors.HexColor("#6b7280"), spaceAfter=10),
+        ParagraphStyle("GT_Header", parent=styles["Heading2"], fontSize=12, textColor=colors.HexColor("#1f2937"),
+                       backColor=colors.HexColor("#f3f4f6"), borderPadding=5, spaceBefore=14, spaceAfter=8),
+        ParagraphStyle("GT_Label",  parent=styles["Normal"],   fontSize=9,  textColor=colors.HexColor("#4b5563"), fontName="Helvetica-Bold"),
+        ParagraphStyle("GT_Value",  parent=styles["Normal"],   fontSize=9,  textColor=colors.HexColor("#111827")),
+        ParagraphStyle("GT_Body",   parent=styles["Normal"],   fontSize=9,  leading=14, textColor=colors.HexColor("#374151")),
+        ParagraphStyle("GT_Mono",   parent=styles["Normal"],   fontSize=8,  leading=13, fontName="Courier", textColor=colors.HexColor("#1f2937")),
+        ParagraphStyle("GT_Footer", parent=styles["Normal"],   fontSize=7,  textColor=colors.HexColor("#9ca3af"), alignment=1),
     ]
     for ps in defs:
         if ps.name not in styles.byName:
@@ -38,15 +65,16 @@ def _build_styles() -> dict:
 
 def _table_style(header: bool = False):
     base = [
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#0c1018")),
-        ("GRID",       (0, 0), (-1, -1), 0.4, colors.HexColor("#1e2d40")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
+        ("GRID",       (0, 0), (-1, -1), 0.5, colors.HexColor("#e5e7eb")),
         ("PADDING",    (0, 0), (-1, -1), 6),
         ("VALIGN",     (0, 0), (-1, -1), "MIDDLE"),
+        ("TEXTCOLOR",  (0, 0), (-1, -1), colors.HexColor("#111827")),
     ]
     if header:
         base += [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0a1520")),
-            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.HexColor("#00d4ff")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f9fafb")),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), colors.HexColor("#111827")),
             ("FONTNAME",   (0, 0), (-1, 0), "Helvetica-Bold"),
         ]
     return TableStyle(base)
@@ -110,6 +138,15 @@ def _timeline_section(story, styles, timeline: list):
     t = Table(rows, colWidths=[1.4*inch, 4.0*inch, 0.6*inch])
     t.setStyle(_table_style(header=True))
     story.append(t)
+    story.append(Spacer(1, 10))
+
+
+def _evidence_section(story, styles, evidence: list):
+    if not evidence:
+        return
+    story.append(Paragraph("FORENSIC EVIDENCE", styles["GT_Header"]))
+    for ev in evidence:
+        story.append(Paragraph(f"<b>•</b> {ev}", styles["GT_Body"]))
     story.append(Spacer(1, 10))
 
 
@@ -211,6 +248,7 @@ def create_unified_pdf_report(result: UnifiedInvestigationResult) -> BytesIO:
     _ioc_section(story, styles, result.iocs or [])
     _timeline_section(story, styles, result.timeline or [])
     _mitre_section(story, styles, result.mitre_mapping or [])
+    _evidence_section(story, styles, result.evidence or [])
     _recs_section(story, styles, result.recommendations or [])
 
     # Footer
@@ -220,7 +258,7 @@ def create_unified_pdf_report(result: UnifiedInvestigationResult) -> BytesIO:
         styles["GT_Footer"]
     ))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_draw_watermark, onLaterPages=_draw_watermark)
     buffer.seek(0)
     return buffer
 
