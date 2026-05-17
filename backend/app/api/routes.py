@@ -134,41 +134,40 @@ async def analyze_file_endpoint(request: Request, background_tasks: BackgroundTa
         raise HTTPException(status_code=400, detail="A valid file must be uploaded.")
 
     result = await analyze_file(file)
-    
-    def post_analysis_task(res):
-        safe_insert(
-            "file_scans",
-            {
-                "scan_type": "file",
-                "target": res.target,
-                "severity": res.severity,
-                "risk_score": res.risk_score,
-                "result": res.model_dump(),
-                "created_at": datetime.utcnow().isoformat() + "Z"
-            },
-        )
-        safe_insert(
-            "reports",
-            {
-                "report_type": "file",
-                "filename": file.filename,
-                "target": res.target,
-                "severity": res.severity,
-                "result_summary": (res.ai_explanation or "")[:500],
-                "result": res.model_dump(),
-                "created_at": datetime.utcnow().isoformat() + "Z",
-            },
-        )
-        import asyncio
-        asyncio.run(manager.broadcast({
-            "event": "new_threat",
-            "type": "file",
-            "target": res.target,
-            "severity": res.severity,
-            "message": "File analysis completed."
-        }))
 
-    background_tasks.add_task(post_analysis_task, result)
+    # Synchronous DB writes — must complete before response so history refresh works
+    safe_insert(
+        "file_scans",
+        {
+            "scan_type": "file",
+            "target": result.target,
+            "severity": result.severity,
+            "risk_score": result.risk_score,
+            "result": result.model_dump(),
+            "created_at": datetime.utcnow().isoformat() + "Z"
+        },
+    )
+    safe_insert(
+        "reports",
+        {
+            "report_type": "file",
+            "filename": file.filename,
+            "target": result.target,
+            "severity": result.severity,
+            "result_summary": (result.ai_explanation or "")[:500],
+            "result": result.model_dump(),
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        },
+    )
+
+    # Non-blocking WebSocket broadcast in background (safe — no DB dependency)
+    async def _broadcast():
+        await manager.broadcast({
+            "event": "new_threat", "type": "file",
+            "target": result.target, "severity": result.severity,
+            "message": "File analysis completed."
+        })
+    background_tasks.add_task(_broadcast)
     return result
 
 
@@ -204,41 +203,39 @@ def analyze_url_endpoint(request: Request, background_tasks: BackgroundTasks, pa
     _hydrate_runtime_keys_from_latest_settings()
     try:
         result = analyze_url(payload.url)
-        
-        def post_analysis_task(res, p_url):
-            safe_insert(
-                "url_scans",
-                {
-                    "scan_type": "url",
-                    "target": res.target,
-                    "severity": res.severity,
-                    "risk_score": res.risk_score,
-                    "result": res.model_dump(),
-                    "created_at": datetime.utcnow().isoformat() + "Z"
-                },
-            )
-            safe_insert(
-                "reports",
-                {
-                    "report_type": "url",
-                    "url": p_url,
-                    "target": res.target,
-                    "severity": res.severity,
-                    "result_summary": (res.ai_explanation or "")[:500],
-                    "result": res.model_dump(),
-                    "created_at": datetime.utcnow().isoformat() + "Z",
-                },
-            )
-            import asyncio
-            asyncio.run(manager.broadcast({
-                "event": "new_threat",
-                "type": "url",
-                "target": res.target,
-                "severity": res.severity,
-                "message": "URL analysis completed."
-            }))
 
-        background_tasks.add_task(post_analysis_task, result, payload.url)
+        # Synchronous DB writes — must complete before response so history refresh works
+        safe_insert(
+            "url_scans",
+            {
+                "scan_type": "url",
+                "target": result.target,
+                "severity": result.severity,
+                "risk_score": result.risk_score,
+                "result": result.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z"
+            },
+        )
+        safe_insert(
+            "reports",
+            {
+                "report_type": "url",
+                "url": payload.url,
+                "target": result.target,
+                "severity": result.severity,
+                "result_summary": (result.ai_explanation or "")[:500],
+                "result": result.model_dump(),
+                "created_at": datetime.utcnow().isoformat() + "Z",
+            },
+        )
+
+        async def _broadcast():
+            await manager.broadcast({
+                "event": "new_threat", "type": "url",
+                "target": result.target, "severity": result.severity,
+                "message": "URL analysis completed."
+            })
+        background_tasks.add_task(_broadcast)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -293,39 +290,37 @@ def analyze_log_endpoint(request: Request, background_tasks: BackgroundTasks, pa
     _hydrate_runtime_keys_from_latest_settings()
     result = analyze_log_text(payload.log_text)
 
-    def post_analysis_task(res):
-        safe_insert(
-            "log_scans",
-            {
-                "scan_type": "log",
-                "target": res.target,
-                "severity": res.severity,
-                "risk_score": res.risk_score,
-                "result": res.model_dump(),
-                "created_at": datetime.utcnow().isoformat() + "Z"
-            },
-        )
-        safe_insert(
-            "reports",
-            {
-                "report_type": "log",
-                "target": res.target,
-                "severity": res.severity,
-                "result_summary": (res.ai_explanation or "")[:500],
-                "result": res.model_dump(),
-                "created_at": datetime.utcnow().isoformat() + "Z",
-            },
-        )
-        import asyncio
-        asyncio.run(manager.broadcast({
-            "event": "new_threat",
-            "type": "log",
-            "target": res.target,
-            "severity": res.severity,
-            "message": "Log analysis completed."
-        }))
+    # Synchronous DB writes — must complete before response so history refresh works
+    safe_insert(
+        "log_scans",
+        {
+            "scan_type": "log",
+            "target": result.target,
+            "severity": result.severity,
+            "risk_score": result.risk_score,
+            "result": result.model_dump(),
+            "created_at": datetime.utcnow().isoformat() + "Z"
+        },
+    )
+    safe_insert(
+        "reports",
+        {
+            "report_type": "log",
+            "target": result.target,
+            "severity": result.severity,
+            "result_summary": (result.ai_explanation or "")[:500],
+            "result": result.model_dump(),
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        },
+    )
 
-    background_tasks.add_task(post_analysis_task, result)
+    async def _broadcast():
+        await manager.broadcast({
+            "event": "new_threat", "type": "log",
+            "target": result.target, "severity": result.severity,
+            "message": "Log analysis completed."
+        })
+    background_tasks.add_task(_broadcast)
     return result
 
 

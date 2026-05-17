@@ -33,9 +33,9 @@ def test_analyze_file_endpoint():
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["filename"] == "sample.ps1"
-    assert payload["file_type"] == "PowerShell script"
-    assert "urls" in payload["iocs"]
-    assert payload["risk"]["severity"] in {"safe", "suspicious", "high", "critical"}
+    assert payload["target"] == "sample.ps1"
+    assert payload["type"] == "file"
+    assert isinstance(payload["iocs"], list)
+    assert payload["severity"] in {"low", "medium", "high", "critical"}
     assert isinstance(payload["timeline"], list)
     assert isinstance(payload["recommendations"], list)

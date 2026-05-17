@@ -330,11 +330,18 @@ export function mapUrlResult(data, scanUrl) {
  * into the shape that LogAnalyzer.jsx expects.
  */
 export function mapLogResult(data, scanText = "") {
-  if (!data) return D_LOG;
+  if (!data || Object.keys(data).length === 0) {
+    return {
+      lines: 0, suspicious: 0, critical: 0, anomalies: 0,
+      risk: 0, level: "low", confidence: 0,
+      timeline: [],
+      iocs: { ips: [], domains: [], urls: [], commands: [], hashes: [], emails: [], reg_keys: [], cves: [] },
+      ai: "", recommendations: [], mitre_mapping: [], behavior_patterns: []
+    };
+  }
 
   const raw = data.raw_artifacts || {};
   const behaviorPatterns = raw.behavior_patterns || [];
-  const ipMatches = raw.ip_matches || [];
 
   const flatIocs = Array.isArray(data.iocs) ? data.iocs : [];
   const iocDict = { ips: [], domains: [], urls: [], commands: [], hashes: [], emails: [], reg_keys: [], cves: [] };
@@ -357,17 +364,16 @@ export function mapLogResult(data, scanText = "") {
   const suspicious = behaviorPatterns.length;
 
   return {
-    ...D_LOG,
-    lines: lines || D_LOG.lines,
+    lines,
     suspicious,
     critical: String(data.severity || "").toLowerCase() === "critical" ? Math.max(1, suspicious) : Math.min(suspicious, 2),
     anomalies: suspicious,
-    risk: Number(data.risk_score ?? D_LOG.risk),
-    level: normalizeLevel(data.severity || "high"),
+    risk: Number(data.risk_score ?? 0),
+    level: normalizeLevel(data.severity || "low"),
     confidence: Number(data.confidence ?? 0),
     iocs: iocDict,
-    ai: data.ai_explanation || D_LOG.ai,
-    timeline: timeline.length ? timeline : D_LOG.timeline,
+    ai: data.ai_explanation || "No AI explanation available.",
+    timeline,
     recommendations: data.recommendations || [],
     mitre_mapping: data.mitre_mapping || [],
     behavior_patterns: behaviorPatterns,

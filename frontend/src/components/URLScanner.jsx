@@ -8,10 +8,10 @@ export function URLScanner({ pendingScan, setPendingScan, onScanTrigger, onScanC
   const [url, setUrl] = useState("");
   const [tab, setTab] = useState("overview");
   const [scanUrl, setScanUrl] = useState("");
-  const [result, setResult] = useState(D_URL);
+  const [result, setResult] = useState(null);
   const [scanError, setScanError] = useState("");
   const [loadingResult, setLoadingResult] = useState(false);
-  const r = result;
+  const r = result || mapUrlResult({}, "");
   const riskVal = Number(r.risk || 0);
   const riskState = riskVal >= 75 ? "critical" : riskVal >= 50 ? "high" : riskVal >= 25 ? "medium" : "low";
   const hasMaliciousInjection = (r.injections || []).some((inj) => String(inj?.detail || "").toLowerCase() !== "no direct web injection pattern identified.");

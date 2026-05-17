@@ -18,7 +18,7 @@ def test_analyze_log_ok():
     assert response.status_code == 200
     payload = response.json()
     assert "risk_score" in payload
-    assert "threat_level" in payload
+    assert "severity" in payload
     assert "iocs" in payload
 
 

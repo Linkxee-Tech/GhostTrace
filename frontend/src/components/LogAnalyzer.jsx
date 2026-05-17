@@ -8,8 +8,8 @@ export function LogAnalyzer({ pendingScan, setPendingScan, onScanTrigger, onScan
   const [text, setText] = useState("");
   const [tab, setTab] = useState("timeline");
   const [scanText, setScanText] = useState("");
-  const [result, setResult] = useState(D_LOG);
-  const r = result;
+  const [result, setResult] = useState(null);
+  const r = result || mapLogResult({}, "");
 
   const go = useCallback(() => { setScanText(text); start(); }, [start, text]);
   const resetAll = () => { reset(); setTab("timeline"); };

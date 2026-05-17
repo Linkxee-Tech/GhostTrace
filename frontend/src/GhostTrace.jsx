@@ -47,6 +47,8 @@ export default function GhostTrace() {
   };
 
   const refreshHistoryAndReports = async () => {
+    // Small delay to ensure synchronous MongoDB writes have committed before we query
+    await new Promise((resolve) => setTimeout(resolve, 800));
     const [files, urls, logs, reports] = await Promise.allSettled([
       apiJson("/api/history/files?limit=200"),
       apiJson("/api/history/urls?limit=200"),

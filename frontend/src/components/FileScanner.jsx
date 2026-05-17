@@ -3,15 +3,23 @@ import { Spinner, Badge, ThreatSeverityCard, MITREBoard, EntropyBar, IOCTable, T
 import { D_FILE, FILE_STEPS } from "./SOCConstants";
 import { useScan, apiJson, apiBlob, downloadBlob, openBlobInNewTab, downloadJson, reportClientError, mapFileResult } from "./SOCUtils";
 
+const EMPTY_FILE_RESULT = {
+  filename: "", type: "", size: "", md5: "", sha1: "", sha256: "",
+  entropy: 0, packed: false, signed: false, vt_ratio: "N/A",
+  sections: [], imports: [], yara: [], strings: [],
+  iocs: { ips: [], hashes: [], domains: [], urls: [], reg_keys: [], commands: [], emails: [], cves: [] },
+  risk: 0, level: "low", confidence: 0, mitre_mapping: [], ai: "", timeline: [], recommendations: [],
+};
+
 export function FileScanner({ pendingScan, setPendingScan, onScanTrigger, onScanComplete }) {
   const { phase, cur, done, start, reset } = useScan(FILE_STEPS);
   const [fname, setFname] = useState("");
   const [tab, setTab] = useState("overview");
   const [drag, setDrag] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
-  const [result, setResult] = useState(D_FILE);
+  const [result, setResult] = useState(null);
   const fileRef = useRef();
-  const r = result;
+  const r = result || EMPTY_FILE_RESULT;
 
   const go = useCallback(fileOrName => {
     if (typeof fileOrName === "string") {
@@ -31,7 +39,7 @@ export function FileScanner({ pendingScan, setPendingScan, onScanTrigger, onScan
     }
   }, [pendingScan, setPendingScan]);
 
-  const resetAll = () => { reset(); setFname(""); setTab("overview"); setDrag(false); setSelectedFile(null); setResult(D_FILE); };
+  const resetAll = () => { reset(); setFname(""); setTab("overview"); setDrag(false); setSelectedFile(null); setResult(null); };
 
   const handleViewReport = async () => {
     const newTab = window.open("", "_blank");
@@ -100,13 +108,13 @@ export function FileScanner({ pendingScan, setPendingScan, onScanTrigger, onScan
         const fd = new FormData();
         fd.append("file", selectedFile);
         const data = await apiJson("/api/analyze-file", { method: "POST", body: fd });
-        // Map UnifiedInvestigationResult → FileScanner display shape
-        const mapped = mapFileResult(data, D_FILE);
-        setResult({ ...D_FILE, ...mapped });
+        // Map UnifiedInvestigationResult → FileScanner display shape (no mock fallback)
+        const mapped = mapFileResult(data, {});
+        setResult({ ...EMPTY_FILE_RESULT, ...mapped });
         if (typeof onScanComplete === "function") await onScanComplete();
       } catch (e) {
         reportClientError("File analysis failed", e);
-        setResult((prev) => ({ ...prev, filename: selectedFile.name }));
+        setResult((prev) => ({ ...(prev || EMPTY_FILE_RESULT), filename: selectedFile.name }));
       }
     })();
   }, [phase, selectedFile, onScanComplete]);
