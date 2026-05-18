@@ -69,18 +69,19 @@ export function Dashboard({ setView, historyItems = HISTORY, reportsData = null,
 
   const lvlBg = { critical: "rgba(255,45,85,.1)", high: "rgba(255,170,0,.1)", medium: "rgba(59,130,246,.1)", low: "rgba(0,255,136,.08)", clean: "rgba(0,255,136,.08)" };
   const typeIcon = { file: "📁", url: "🌐", log: "📋", ioc: "🔗" };
+  const normalizedHistory = historyItems.map((s) => ({ ...s, level: normalizeLevel(s.level) }));
   const totalScans = historyItems.length;
-  const threatCount = historyItems.filter((s) => ["critical", "high", "medium"].includes(String(s.level))).length;
+  const threatCount = normalizedHistory.filter((s) => ["critical", "high", "medium"].includes(s.level)).length;
   const iocCount = historyItems.reduce((n, s) => n + Number(s.iocs || 0), 0);
   const reportCount = Array.isArray(reportsData) ? reportsData.length : 0;
-  const criticalCount = historyItems.filter((s) => String(s.level) === "critical").length;
+  const criticalCount = normalizedHistory.filter((s) => s.level === "critical").length;
   const recent = historyItems.slice(0, 6);
 
   const byLevel = {
-    critical: historyItems.filter((s) => String(s.level) === "critical").length,
-    high: historyItems.filter((s) => String(s.level) === "high").length,
-    medium: historyItems.filter((s) => String(s.level) === "medium").length,
-    lowClean: historyItems.filter((s) => ["low", "clean"].includes(String(s.level))).length,
+    critical: normalizedHistory.filter((s) => s.level === "critical").length,
+    high: normalizedHistory.filter((s) => s.level === "high").length,
+    medium: normalizedHistory.filter((s) => s.level === "medium").length,
+    lowClean: normalizedHistory.filter((s) => ["low", "clean"].includes(s.level)).length,
   };
   const pct = (v) => totalScans ? Math.round((Number(v || 0) / totalScans) * 100) : 0;
 
