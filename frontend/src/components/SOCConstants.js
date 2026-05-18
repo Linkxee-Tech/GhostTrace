@@ -162,6 +162,7 @@ export const DEMO_LOGS = `2024-11-28 02:14:33 sshd[2341]: Failed password for ro
 export const NAV = [
   { section:"Main", items:[
     { id:"dashboard", icon:"🏠", label:"Dashboard" },
+    { id:"walkthrough", icon:"🎓", label:"Guided Walkthrough", badge:"Demo" },
     { id:"history",   icon:"📜", label:"Scan History" },
   ]},
   { section:"Analysis", items:[
@@ -187,6 +188,7 @@ export const NAV = [
 
 export const TITLES = {
   dashboard:"Dashboard",
+  walkthrough:"Interactive Analyst Walkthrough",
   history:"Scan History",
   "file-scan":"File Scanner",
   "url-scan":"URL Scanner",

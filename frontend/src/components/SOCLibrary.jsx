@@ -242,8 +242,147 @@ export function RiskDisplay({ score, level, children }) {
   );
 }
 
-export function ScanProgress({ steps, cur, done }) {
-  const pct = Math.round((done.length / steps.length) * 100);
+export function ScanProgress({ steps = [], cur = -1, done = [] }) {
+  const safeSteps = steps || [];
+  const safeDone = done || [];
+  const pct = safeSteps.length ? Math.round((safeDone.length / safeSteps.length) * 100) : 0;
+  const [logs, setLogs] = React.useState([]);
+  const termEndRef = React.useRef(null);
+
+  const isFile = safeSteps.some(s => s?.label?.toLowerCase()?.includes("file") || s?.label?.toLowerCase()?.includes("entropy"));
+  const isUrl = safeSteps.some(s => s?.label?.toLowerCase()?.includes("dns") || s?.label?.toLowerCase()?.includes("reputation"));
+
+  const getLogLinesForStep = (stepIdx) => {
+    if (isFile) {
+      const fileLines = [
+        [
+          "[SYS] Mount target stream: file_payload",
+          "[SYS] Extracting binary magic bytes... PE32 MZ Header detected",
+          "[SYS] Image Base: 0x00400000, Entry Point: 0x00018d40",
+          "[SYS] Subsystem: GUI (Windows), Compiler: MSVC++"
+        ],
+        [
+          "[HASH] Invoking sha256 / md5 cryptographic engines...",
+          "[HASH] MD5: a1b2c3d4e5f678901234567890abcdef",
+          "[HASH] SHA-1: abc123def456789012345678901234567890abcd12",
+          "[HASH] SHA-256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ],
+        [
+          "[ENTROPY] Running byte-frequency density scans...",
+          "[ENTROPY] Section .text -> Entropy: 7.91 (Packed/Encrypted) ⚠️",
+          "[ENTROPY] Section .rsrc -> Entropy: 7.88 (Packed/Encrypted) ⚠️",
+          "[ENTROPY] Section .data -> Entropy: 6.23 (Normal)",
+          "[ENTROPY] Overall Entropy: 7.82. Verdict: Packed binary detected."
+        ],
+        [
+          "[PE] Parsing Import Address Table (IAT) references...",
+          "[PE] Found CreateRemoteThread -> PROCESS INJECTION CAPABILITY ⚠️",
+          "[PE] Found VirtualAllocEx -> PROCESS INJECTION CAPABILITY ⚠️",
+          "[PE] Found WriteProcessMemory -> PROCESS INJECTION CAPABILITY ⚠️",
+          "[PE] Found URLDownloadToFile -> DOWNLOADER SIGNATURE ⚠️"
+        ],
+        [
+          "[STRINGS] Running plaintext extraction filters...",
+          "[STRINGS] Found C2 URL: http://185.220.101.47/payload.bin ⚠️",
+          "[STRINGS] Found Registry autorun: HKLM\\Software\\CurrentVersion\\Run",
+          "[STRINGS] Found shellcode launcher: powershell -encodedCommand..."
+        ],
+        [
+          "[YARA] Matching against 10,204 active signatures...",
+          "[YARA] RULE HIT: Trojan.Win32.Emotet.ABCD 🔥",
+          "[YARA] RULE HIT: Suspicious.PE.ProcessInjection 🔥",
+          "[YARA] RULE HIT: Malware.Packer.UPX.Modified"
+        ],
+        [
+          "[AI] Submitting security indicators to GhostTrace AI model...",
+          "[AI] Reconstructing attack chain mapped to MITRE ATT&CK tactics...",
+          "[AI] Verdict compiled: CRITICAL Emotet malware loader.",
+          "[SYS] Analysis pipeline complete. Releasing streams."
+        ]
+      ];
+      return fileLines[stepIdx] || [];
+    } else if (isUrl) {
+      const urlLines = [
+        [
+          "[DNS] Initiating target domain queries...",
+          "[DNS] Resolved: secure-paypa1.com -> 185.220.101.47 ⚠️",
+          "[DNS] GeoIP: Russian Federation (RU) - Moscow",
+          "[DNS] Hosting Network: Frantech Bulletproof Solutions"
+        ],
+        [
+          "[SSL] Parsing certificate chain parameters...",
+          "[SSL] Issuer: Self-signed Certificate Authority ⚠️",
+          "[SSL] Expiry check: INVALID / EXPIRED in 2022 ⚠️",
+          "[SSL] Warning: Certificate lacks trust path validation."
+        ],
+        [
+          "[REPUTATION] Querying cyber rating aggregators...",
+          "[REPUTATION] VirusTotal: 23 engines blacklisted this URL 🚨",
+          "[REPUTATION] AbuseIPDB: 94 abuse reports registered on IP 🚨",
+          "[REPUTATION] PhishTank: Verified active phishing campaign 🚨"
+        ],
+        [
+          "[CONTENT] Inspecting remote page DOM structure passively...",
+          "[CONTENT] Warning: Login credentials form detected! ⚠️",
+          "[CONTENT] Target action: http://185.220.101.47/collect.php ⚠️",
+          "[CONTENT] Hidden IFrames: 2 zero-size frames found",
+          "[CONTENT] Obfuscation: eval(atob(unescape(...))) code blocks detected ⚠️"
+        ],
+        [
+          "[AI] Building cyber risk explanation metrics...",
+          "[AI] Mapped MITRE ATT&CK: Typosquatting Brand Impersonation (T1566.002)",
+          "[AI] Threat explanation complete. Recommending perimeter firewall blocks.",
+          "[SYS] URL Analysis finalized successfully."
+        ]
+      ];
+      return urlLines[stepIdx] || [];
+    } else {
+      const logLines = [
+        [
+          "[PARSER] Recognizing host syslog syntax...",
+          "[PARSER] Ingested 12,847 rows successfully in 45ms",
+          "[PARSER] Initializing chronological stream mapping..."
+        ],
+        [
+          "[ANALYTICS] Ingesting authentication sockets telemetry...",
+          "[ANALYTICS] Storm Alert: 894 failed SSH attempts from 185.220.101.47 🚨",
+          "[ANALYTICS] Breach Alert: Password accepted for user 'ubuntu' at 02:22:11 🚨",
+          "[ANALYTICS] Privilege Escalation: sudo -i bypass detected at 02:22:45 ⚠️",
+          "[ANALYTICS] Persistence: crontab curl payload added at 02:23:01 ⚠️"
+        ],
+        [
+          "[AI] Correlating multi-event anomalies...",
+          "[AI] Reconstructed MITRE ATT&CK chain: Brute Force -> Privilege Escalation -> Persistence -> C2 Beacons.",
+          "[SYS] Log forensic pipeline complete."
+        ]
+      ];
+      return logLines[stepIdx] || [];
+    }
+  };
+
+  React.useEffect(() => {
+    if (cur >= 0) {
+      const newLines = getLogLinesForStep(cur);
+      if (newLines.length > 0) {
+        let timer;
+        let lineIdx = 0;
+        const addNext = () => {
+          if (lineIdx < newLines.length) {
+            setLogs(prev => [...prev, newLines[lineIdx]]);
+            lineIdx++;
+            timer = setTimeout(addNext, 100);
+          }
+        };
+        addNext();
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [cur]);
+
+  React.useEffect(() => {
+    termEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
   return (
     <div>
       <div className="fac gap12 mb20">
@@ -254,24 +393,48 @@ export function ScanProgress({ steps, cur, done }) {
         </div>
         <span className="mono txt-xs txt-muted">{pct}%</span>
       </div>
-      <div className="scan-steps">
-        {steps.map((s, i) => {
-          const isDone = done.includes(i);
-          const isRun = cur === i && !isDone;
-          const st = isDone ? "done" : isRun ? "running" : "pending";
-          return (
-            <div key={i} className="s-step">
-              <div className="s-ic">
-                {isDone
-                  ? <span style={{ color: "var(--green)" }}>✓</span>
-                  : isRun ? <Spinner />
-                  : <span style={{ color: "var(--t3)" }}>○</span>}
+      <div className="g2">
+        <div className="scan-steps">
+          {safeSteps.map((s, i) => {
+            const isDone = safeDone.includes(i);
+            const isRun = cur === i && !isDone;
+            const st = isDone ? "done" : isRun ? "running" : "pending";
+            return (
+              <div key={i} className="s-step">
+                <div className="s-ic">
+                  {isDone
+                    ? <span style={{ color: "var(--green)" }}>✓</span>
+                    : isRun ? <Spinner />
+                    : <span style={{ color: "var(--t3)" }}>○</span>}
+                </div>
+                <div className={`s-lbl ${st}`}>{s.label}</div>
+                <div className={`s-stat ${st}`}>{isDone ? "Done" : isRun ? "Running…" : "Queued"}</div>
               </div>
-              <div className={`s-lbl ${st}`}>{s.label}</div>
-              <div className={`s-stat ${st}`}>{isDone ? "Done" : isRun ? "Running…" : "Queued"}</div>
+            );
+          })}
+        </div>
+        <div className="terminal" style={{ margin: 0, display: "flex", flexDirection: "column", height: 210 }}>
+          <div className="term-bar" style={{ flexShrink: 0 }}>
+            <div className="term-dots">
+              <div className="term-dot" style={{ background: "#ff5f57" }} />
+              <div className="term-dot" style={{ background: "#febc2e" }} />
+              <div className="term-dot" style={{ background: "#28c840" }} />
             </div>
-          );
-        })}
+            <span className="term-label">Forensic Telemetry Stream</span>
+          </div>
+          <div className="term-body" style={{ flex: 1, overflowY: "auto", fontFamily: "var(--mono)", fontSize: 10, lineHeight: 1.5, padding: "8px 12px", color: "var(--cyan)" }}>
+            {logs.map((log, idx) => {
+              const logStr = String(log || "");
+              const isAlert = logStr.includes("⚠️") || logStr.includes("🚨") || logStr.includes("🔥");
+              return (
+                <div key={idx} style={{ color: isAlert ? "var(--red)" : "inherit", marginBottom: 3 }}>
+                  {logStr}
+                </div>
+              );
+            })}
+            <div ref={termEndRef} />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -10,6 +10,17 @@ export function LogAnalyzer({ pendingScan, setPendingScan, onScanTrigger, onScan
   const [scanText, setScanText] = useState("");
   const [result, setResult] = useState(null);
   const r = result || mapLogResult({}, "");
+  const mkHistoryItem = (res) => ({
+    id: `session-log-${Date.now()}-${Math.random()}`,
+    type: "log",
+    name: "System Logs",
+    level: String(res?.level || "medium").toLowerCase(),
+    risk: Number(res?.risk || 0),
+    date: new Date().toLocaleString(),
+    findings: Number(res?.suspicious || 0),
+    iocs: Object.values(res?.iocs || {}).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0),
+    ts: Date.now(),
+  });
 
   const go = useCallback(() => { setScanText(text); start(); }, [start, text]);
   const resetAll = () => { reset(); setTab("timeline"); };
@@ -19,8 +30,9 @@ export function LogAnalyzer({ pendingScan, setPendingScan, onScanTrigger, onScan
     (async () => {
       try {
         const data = await apiJson("/api/analyze-log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ log_text: scanText }) });
-        setResult({ ...mapLogResult(data, scanText), mitre_mapping: data.mitre_mapping || [] });
-        if (typeof onScanComplete === "function") await onScanComplete();
+        const normalized = { ...mapLogResult(data, scanText), mitre_mapping: data.mitre_mapping || [] };
+        setResult(normalized);
+        if (typeof onScanComplete === "function") await onScanComplete(mkHistoryItem(normalized));
       } catch (e) { reportClientError("Log analysis failed", e); }
     })();
   }, [phase, scanText, onScanComplete]);

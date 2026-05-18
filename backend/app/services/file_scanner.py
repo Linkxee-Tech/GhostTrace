@@ -1,12 +1,41 @@
 import hashlib
+import json
 import math
+import os
 import re
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 from typing import Any
 from fastapi import UploadFile
 from app.services.ioc_extractor import extract_iocs
 from app.services.ai_engine import explain_behavior, get_mitre_mapping
 from app.schemas import AnalysisResult, TimelineEvent, UnifiedInvestigationResult
 from app.services.yara_scanner import yara_scan_content
+
+
+def _virustotal_hash_lookup(sha256_hash: str) -> dict[str, Any]:
+    api_key = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
+    if not api_key:
+        return {"available": False, "reason": "VIRUSTOTAL_API_KEY missing"}
+
+    req = Request(
+        f"https://www.virustotal.com/api/v3/files/{sha256_hash}",
+        headers={"x-apikey": api_key},
+    )
+    try:
+        with urlopen(req, timeout=8) as resp:  # nosec B310 - defensive intel lookup
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except (URLError, TimeoutError, ValueError):
+        return {"available": False, "reason": "VirusTotal lookup failed"}
+
+    stats = payload.get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
+    return {
+        "available": True,
+        "malicious": int(stats.get("malicious", 0)),
+        "suspicious": int(stats.get("suspicious", 0)),
+        "harmless": int(stats.get("harmless", 0)),
+        "undetected": int(stats.get("undetected", 0)),
+    }
 
 
 def compute_hashes(content: bytes) -> dict[str, str]:
@@ -62,7 +91,7 @@ def find_suspicious_strings(content: bytes) -> list[str]:
     return sorted(findings)
 
 
-def compute_risk_score(analysis: Any, yara_matches: list[str]) -> dict[str, Any]:
+def compute_risk_score(analysis: Any, yara_matches: list[str], vt: dict[str, Any] | None = None) -> dict[str, Any]:
     score = 0
     # Entropy weight
     if analysis.entropy >= 7.2:
@@ -93,6 +122,12 @@ def compute_risk_score(analysis: Any, yara_matches: list[str]) -> dict[str, Any]
     if analysis.file_type in {"PE executable", "ELF executable"}:
         score += 5
 
+    if vt and vt.get("available"):
+        if int(vt.get("malicious", 0)) > 0:
+            score += 30
+        elif int(vt.get("suspicious", 0)) > 0:
+            score += 15
+
     score = min(score, 100)
     
     if score >= 80:
@@ -110,9 +145,15 @@ def compute_risk_score(analysis: Any, yara_matches: list[str]) -> dict[str, Any]
         if score < 10:
             severity = "clean" if not yara_matches else "low"
 
+    vt_note = ""
+    if vt and vt.get("available"):
+        vt_note = (
+            f", VirusTotal verdicts (malicious={int(vt.get('malicious', 0))}, "
+            f"suspicious={int(vt.get('suspicious', 0))})"
+        )
     explanation = (
         f"Risk score of {score} determined by entropy ({analysis.entropy}), "
-        f"YARA hits ({len(yara_matches)}), and {len(analysis.suspicious_strings)} suspicious strings."
+        f"YARA hits ({len(yara_matches)}), and {len(analysis.suspicious_strings)} suspicious strings{vt_note}."
     )
 
     return {
@@ -188,6 +229,7 @@ def build_recommendations(risk_severity: str) -> list[str]:
 async def analyze_file(file: UploadFile) -> UnifiedInvestigationResult:
     content = await file.read()
     hashes = compute_hashes(content)
+    vt = _virustotal_hash_lookup(hashes["sha256"])
     entropy = compute_entropy(content)
     suspicious_strings = find_suspicious_strings(content)
     iocs = extract_iocs(content)
@@ -206,8 +248,19 @@ async def analyze_file(file: UploadFile) -> UnifiedInvestigationResult:
         'file_type': file_type
     })
     
-    risk = compute_risk_score(temp_result, yara_matches)
+    risk = compute_risk_score(temp_result, yara_matches, vt=vt)
     timeline = build_timeline(file_type, suspicious_strings, iocs)
+    if vt.get("available"):
+        timeline.append(
+            {
+                "stage": "Threat Intel Correlation",
+                "details": (
+                    "Correlated file hash with VirusTotal: "
+                    f"{int(vt.get('malicious', 0))} malicious and {int(vt.get('suspicious', 0))} suspicious engines."
+                ),
+                "sev": "high" if int(vt.get("malicious", 0)) > 0 else "medium",
+            }
+        )
     recommendations = build_recommendations(risk["severity"])
 
     # Flatten IOCs for unified model
@@ -232,6 +285,8 @@ async def analyze_file(file: UploadFile) -> UnifiedInvestigationResult:
             "file_type": file_type,
             "entropy": entropy,
             "hashes": hashes,
-            "yara_matches": yara_matches
+            "yara_matches": yara_matches,
+            "file_size": len(content),
+            "virustotal": vt,
         }
     )

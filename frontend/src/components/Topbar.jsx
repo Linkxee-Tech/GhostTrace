@@ -46,7 +46,7 @@ export function Topbar({ view, backendStatus, historyItems = [], onSearch }) {
     <div className="topbar" style={{ position: "relative" }}>
       {/* Title */}
       <div style={{ fontSize: 13.5, fontWeight: 700, flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 15 }}>📡</span>
+        <img src="/ghosttrace_logo.png" alt="GhostTrace logo" className="brand-logo-topbar" />
         <span>{TITLES[view] || "GhostTrace"}</span>
         {threatCount > 0 && (
           <span style={{
@@ -157,3 +157,4 @@ export function Topbar({ view, backendStatus, historyItems = [], onSearch }) {
     </div>
   );
 }
+

@@ -23,11 +23,22 @@ class TraceIDMiddleware(BaseHTTPMiddleware):
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
+        is_docs_request = request.url.path.startswith("/docs") or request.url.path.startswith("/redoc")
+        csp_value = "default-src 'self'"
+        if is_docs_request:
+            csp_value = (
+                "default-src 'self'; "
+                "img-src 'self' https://fastapi.tiangolo.com data:; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                "font-src 'self' https://cdn.jsdelivr.net; "
+                "connect-src 'self'"
+            )
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        response.headers["Content-Security-Policy"] = csp_value
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 

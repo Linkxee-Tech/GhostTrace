@@ -54,6 +54,16 @@ html,body,#root{background:var(--void);color:var(--t1);height:100%;overflow:hidd
 .sb-glow{position:absolute;right:0;top:0;width:1px;height:100%;background:linear-gradient(to bottom,transparent,rgba(0,255,136,.3) 50%,transparent);pointer-events:none}
 .sb-logo{padding:20px 18px 16px;border-bottom:1px solid var(--border);flex-shrink:0}
 .sb-logo-row{display:flex;align-items:center;gap:10px;margin-bottom:3px}
+.brand-logo-sidebar{
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: 0 0 14px rgba(0,212,255,.2);
+  background: rgba(255,255,255,.03);
+  flex-shrink: 0;
+}
 .sb-wordmark{font-weight:900;font-size:19px;letter-spacing:-.5px;background:linear-gradient(130deg,var(--green) 0%,var(--cyan) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
 .sb-tagline{font-family:var(--mono);font-size:8px;color:var(--t3);letter-spacing:1.8px;text-transform:uppercase}
 .sb-nav{flex:1;padding:12px 10px;overflow-y:auto}
@@ -71,6 +81,16 @@ html,body,#root{background:var(--void);color:var(--t1);height:100%;overflow:hidd
 
 /* ── Topbar ── */
 .topbar{height:50px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 22px;gap:14px;background:var(--dark);flex-shrink:0}
+.brand-logo-topbar{
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.15);
+  box-shadow: 0 0 10px rgba(0,212,255,.15);
+  background: rgba(255,255,255,.03);
+  flex-shrink: 0;
+}
 .t-chip{display:flex;align-items:center;gap:5px;padding:3px 8px;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:5px}
 
 /* ── Cards ── */
@@ -642,4 +662,3 @@ html,body,#root{background:var(--void);color:var(--t1);height:100%;overflow:hidd
   font-size: 14px;
   flex-shrink: 0;
 }
-

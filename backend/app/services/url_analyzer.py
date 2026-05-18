@@ -16,35 +16,10 @@ try:
 except Exception:  # pragma: no cover
     BeautifulSoup = None
 
-try:
-    from openai import OpenAI
-except Exception:  # pragma: no cover
-    OpenAI = None
 from app.services.ai_engine import get_mitre_mapping
+from app.services.llm_fallback import generate_with_fallback
 from app.schemas import UrlAnalysisResult, UnifiedInvestigationResult
 logger = logging.getLogger(__name__)
-
-def _openai_generate_text(client, model: str, prompt: str, max_tokens: int = 220) -> str:
-    if hasattr(client, "responses"):
-        resp = client.responses.create(model=model, input=prompt, max_output_tokens=max_tokens)
-        return (getattr(resp, "output_text", "") or "").strip()
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-    )
-    return ((resp.choices[0].message.content if resp and resp.choices else "") or "").strip()
-
-
-def _is_rate_limited(exc: Exception) -> bool:
-    name = type(exc).__name__.lower()
-    if "ratelimit" in name:
-        return True
-    status = getattr(exc, "status_code", None)
-    if status == 429:
-        return True
-    return "429" in str(exc)
-
 
 def _safe_get_json(url: str, headers: dict[str, str] | None = None) -> dict[str, Any] | None:
     req = Request(url, headers=headers or {})
@@ -367,59 +342,26 @@ def _zap_quick_assessment(target_url: str) -> dict[str, Any]:
 def _generate_url_ai_explanation(
     target_url: str, findings: list[str], vulnerabilities: list[str], injections: list[str]
 ) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key or OpenAI is None:
+    if not os.getenv("OPENAI_API_KEY", "").strip() and not os.getenv("GROQ_API_KEY", "").strip():
         return (
             "AI explanation unavailable because OPENAI_API_KEY is not configured. "
             "Current result is deterministic and evidence-based from integrated scanners."
         )
-    try:
-        client = OpenAI(api_key=api_key)
-        prompt = (
-            "You are a defensive cybersecurity analyst. Explain likely compromise path and remediation.\n"
-            f"URL: {target_url}\n"
-            f"Findings: {findings}\n"
-            f"Vulnerabilities: {vulnerabilities}\n"
-            f"Injection indicators: {injections}\n"
-            "Output concise 4-6 sentences with evidence chain."
-        )
-        models = [os.getenv("OPENAI_MODEL", "").strip() or "gpt-4.1-mini", "gpt-4o-mini"]
-        seen = set()
-        last_exc: Exception | None = None
-        for model in models:
-            if model in seen:
-                continue
-            seen.add(model)
-            for attempt in range(3):
-                try:
-                    text = _openai_generate_text(client, model, prompt, max_tokens=220)
-                    if text:
-                        return text
-                except Exception as exc:
-                    last_exc = exc
-                    logger.debug("OpenAI URL explanation failed for %s model=%s attempt=%s: %s", target_url, model, attempt + 1, exc)
-                    if _is_rate_limited(exc) and attempt < 2:
-                        time.sleep(1.2 * (attempt + 1))
-                        continue
-                    break
-        reason = f" ({type(last_exc).__name__})" if last_exc else ""
-        if last_exc and _is_rate_limited(last_exc):
-            return (
-                "AI explanation service is temporarily rate-limited. "
-                "Deterministic forensic findings remain available from integrated scanners. "
-                "Retry in a few moments."
-            )
-        return (
-            "AI explanation service could not be reached"
-            f"{reason}. Deterministic forensic findings "
-            "remain available from integrated scanners."
-        )
-    except Exception as exc:
-        logger.debug("OpenAI URL explanation failed for %s: %s", target_url, exc)
-        return (
-            "AI explanation service could not be reached. Deterministic forensic findings "
-            "remain available from integrated scanners."
-        )
+    prompt = (
+        "You are a defensive cybersecurity analyst. Explain likely compromise path and remediation.\n"
+        f"URL: {target_url}\n"
+        f"Findings: {findings}\n"
+        f"Vulnerabilities: {vulnerabilities}\n"
+        f"Injection indicators: {injections}\n"
+        "Output concise 4-6 sentences with evidence chain."
+    )
+    text = generate_with_fallback(prompt, max_tokens=220, primary_model="gpt-4.1-mini")
+    if text:
+        return text
+    return (
+        "AI explanation service could not be reached. Deterministic forensic findings "
+        "remain available from integrated scanners."
+    )
 
 
 def _normalize_target_url(target_url: str) -> str:
@@ -491,6 +433,10 @@ def analyze_url(target_url: str) -> UnifiedInvestigationResult:
     rep = _domain_reputation(domain)
     ip_rep = _ip_reputation(domain)
     urlscan = _urlscan_lookup(normalized_url)
+    urlscan_live: dict[str, Any] = {"submitted": False}
+    if os.getenv("URLSCAN_API_KEY", "").strip():
+        if not urlscan.get("available") or urlscan.get("verdict") in {None, False}:
+            urlscan_live = _urlscan_submit_and_poll(normalized_url)
     page_artifacts = _fetch_page_artifacts(normalized_url)
 
     if rep["blacklist_hit"]:
@@ -499,6 +445,9 @@ def analyze_url(target_url: str) -> UnifiedInvestigationResult:
     if urlscan.get("available") and urlscan.get("verdict") is True:
         score += 25
         findings.append("URLScan.io reputation engine returned a confirmed malicious verdict.")
+    if urlscan_live.get("ready") and urlscan_live.get("verdict") is True:
+        score += 25
+        findings.append("Live URLScan submission returned a confirmed malicious verdict.")
     
     if page_artifacts.get("hidden_iframe_count", 0) > 0:
         score += 15
@@ -542,6 +491,12 @@ def analyze_url(target_url: str) -> UnifiedInvestigationResult:
     ]
     if rep["blacklist_hit"] or (urlscan.get("available") and urlscan.get("verdict")):
         timeline.append({"stage": "Reputation Check", "details": "Negative reputation found in global threat feeds.", "sev": "high"})
+    if urlscan_live.get("submitted"):
+        timeline.append({
+            "stage": "Live Sandbox Correlation",
+            "details": "Submitted URL to URLScan for real-time verdict and artifact enrichment.",
+            "sev": "medium",
+        })
     
     if findings or vulnerability_findings or malware_injection_findings:
         timeline.append({"stage": "Content Analysis", "details": f"Found {len(findings)+len(vulnerability_findings)+len(malware_injection_findings)} suspicious indicators in URL and HTML.", "sev": "high" if score > 60 else "medium"})
@@ -574,7 +529,8 @@ def analyze_url(target_url: str) -> UnifiedInvestigationResult:
             "ip_reputation": ip_rep,
             "ssl_info": ssl_info,
             "page_artifacts": page_artifacts,
-            "urlscan": urlscan
+            "urlscan": urlscan,
+            "urlscan_live": urlscan_live,
         },
         evidence=findings + vulnerability_findings + malware_injection_findings
     )

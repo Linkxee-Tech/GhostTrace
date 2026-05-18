@@ -2,7 +2,7 @@ import React, { useState, useCallback } from "react";
 import { Badge, IOCPanel } from "./SOCLibrary";
 import { DEMO_IOC_TEXT } from "./SOCConstants";
 
-export function IOCExtractor({ onScanTrigger }) {
+export function IOCExtractor({ onScanTrigger, onScanComplete }) {
   const [text, setText] = useState("");
   const [result, setResult] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -18,8 +18,23 @@ export function IOCExtractor({ onScanTrigger }) {
     const reg_keys = [...new Set(t.match(/HK(?:LM|CU|CR|U|CC)\\[^\s"'\n]+/gi) || [])];
     const commands = [...new Set((t.match(/(?:cmd\.exe|powershell|bash|wget|curl|python|nc|ncat)\s+[^\n]{5,}/gi) || []).map(c => c.slice(0, 80)))];
     const cves  = [...new Set(t.match(/CVE-\d{4}-\d{4,7}/gi) || [])];
-    setResult({ ips, domains, urls, emails, hashes, reg_keys, commands, cves });
-  }, [text]);
+    const extracted = { ips, domains, urls, emails, hashes, reg_keys, commands, cves };
+    setResult(extracted);
+    if (typeof onScanComplete === "function") {
+      const total = Object.values(extracted).reduce((a, v) => a + v.length, 0);
+      onScanComplete({
+        id: `session-ioc-${Date.now()}-${Math.random()}`,
+        type: "ioc",
+        name: "IOC Extraction",
+        level: total > 0 ? "medium" : "low",
+        risk: Math.min(100, total * 4),
+        date: new Date().toLocaleString(),
+        findings: total,
+        iocs: total,
+        ts: Date.now(),
+      });
+    }
+  }, [text, onScanComplete]);
 
   const total = result ? Object.values(result).reduce((a, v) => a + v.length, 0) : 0;
 

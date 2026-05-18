@@ -1,32 +1,6 @@
 from typing import List
 import os
-import time
-
-try:
-    from openai import OpenAI
-except Exception:  # pragma: no cover
-    OpenAI = None
-
-def _openai_generate_text(client, model: str, prompt: str, max_tokens: int = 220) -> str:
-    if hasattr(client, "responses"):
-        resp = client.responses.create(model=model, input=prompt, max_output_tokens=max_tokens)
-        return (getattr(resp, "output_text", "") or "").strip()
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-    )
-    return ((resp.choices[0].message.content if resp and resp.choices else "") or "").strip()
-
-
-def _is_rate_limited(exc: Exception) -> bool:
-    name = type(exc).__name__.lower()
-    if "ratelimit" in name:
-        return True
-    status = getattr(exc, "status_code", None)
-    if status == 429:
-        return True
-    return "429" in str(exc)
+from app.services.llm_fallback import generate_with_fallback
 
 
 def explain_behavior(target: str, type: str, findings: list[str], iocs: dict) -> str:
@@ -37,33 +11,21 @@ def explain_behavior(target: str, type: str, findings: list[str], iocs: dict) ->
         "Manual review of extracted artifacts and IOCs is recommended to confirm potential malicious objectives."
     )
     
-    if not api_key or OpenAI is None:
+    if not api_key and not os.getenv("GROQ_API_KEY", "").strip():
         return deterministic_summary
-        
-    try:
-        client = OpenAI(api_key=api_key)
-        prompt = (
-            "You are a senior defensive cybersecurity analyst and SOC lead.\n"
-            f"Analyze this {type} investigation: {target}\n"
-            f"Findings: {findings}\n"
-            f"Extracted IOCs: {iocs}\n\n"
-            "Provide an expert attack reconstruction in 5 sentences. "
-            "Identify the likely threat actor objective (e.g. Credential Theft, Ransomware Staging, C2 Beaconing). "
-            "Mention specific MITRE ATT&CK techniques if applicable. "
-            "Be precise, technical, and use evidence-based reasoning."
-        )
-        
-        models = [os.getenv("OPENAI_MODEL", "").strip() or "gpt-4o-mini", "gpt-4o-mini"]
-        for model in models:
-            try:
-                text = _openai_generate_text(client, model, prompt, max_tokens=300)
-                if text:
-                    return text
-            except Exception:
-                continue
-        return deterministic_summary
-    except Exception:
-        return deterministic_summary
+
+    prompt = (
+        "You are a senior defensive cybersecurity analyst and SOC lead.\n"
+        f"Analyze this {type} investigation: {target}\n"
+        f"Findings: {findings}\n"
+        f"Extracted IOCs: {iocs}\n\n"
+        "Provide an expert attack reconstruction in 5 sentences. "
+        "Identify the likely threat actor objective (e.g. Credential Theft, Ransomware Staging, C2 Beaconing). "
+        "Mention specific MITRE ATT&CK techniques if applicable. "
+        "Be precise, technical, and use evidence-based reasoning."
+    )
+    text = generate_with_fallback(prompt, max_tokens=300, primary_model="gpt-4o-mini")
+    return text or deterministic_summary
 
 def get_mitre_mapping(findings: list[str]) -> list[dict[str, str]]:
     # Simplified MITRE mapper for deterministic fallback
