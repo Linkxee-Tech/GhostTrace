@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover
 
 from app.services.ai_engine import get_mitre_mapping
 from app.services.llm_fallback import generate_with_fallback
-from app.schemas import UrlAnalysisResult, UnifiedInvestigationResult
+from app.schemas import UrlAnalysisResult, InvestigationResult
 logger = logging.getLogger(__name__)
 
 def _safe_get_json(url: str, headers: dict[str, str] | None = None) -> dict[str, Any] | None:
@@ -384,12 +384,12 @@ def _normalize_target_url(target_url: str) -> str:
     return candidate
 
 
-from app.schemas import UrlAnalysisResult, UnifiedInvestigationResult
+from app.schemas import UrlAnalysisResult, InvestigationResult
 logger = logging.getLogger(__name__)
 
 # ... (internal functions stay the same, I'll only replace analyze_url)
 
-def analyze_url(target_url: str) -> UnifiedInvestigationResult:
+def analyze_url(target_url: str) -> InvestigationResult:
     normalized_url = _normalize_target_url(target_url)
     parsed = urlparse(normalized_url)
     

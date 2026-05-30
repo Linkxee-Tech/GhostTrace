@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import UploadFile
 from app.services.ioc_extractor import extract_iocs
 from app.services.ai_engine import explain_behavior, get_mitre_mapping
-from app.schemas import AnalysisResult, TimelineEvent, UnifiedInvestigationResult
+from app.schemas import AnalysisResult, TimelineEvent, InvestigationResult
 from app.services.yara_scanner import yara_scan_content
 
 
@@ -226,7 +226,7 @@ def build_recommendations(risk_severity: str) -> list[str]:
     return base + ["Continue monitoring for related indicators of compromise."]
 
 
-async def analyze_file(file: UploadFile) -> UnifiedInvestigationResult:
+async def analyze_file(file: UploadFile) -> InvestigationResult:
     content = await file.read()
     hashes = compute_hashes(content)
     vt = _virustotal_hash_lookup(hashes["sha256"])
@@ -270,7 +270,7 @@ async def analyze_file(file: UploadFile) -> UnifiedInvestigationResult:
             for val in v:
                 flat_iocs.append({"type": k.rstrip('s'), "value": str(val)})
 
-    return UnifiedInvestigationResult(
+    return InvestigationResult(
         target=file.filename,
         type="file",
         risk_score=risk["score"],

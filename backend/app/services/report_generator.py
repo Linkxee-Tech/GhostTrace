@@ -7,7 +7,7 @@ from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.utils import ImageReader
-from app.schemas import UnifiedInvestigationResult
+from app.schemas import InvestigationResult
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -90,7 +90,7 @@ def _story_header(story, styles, title: str, subtitle: str, report_type: str = "
     story.append(Spacer(1, 14))
 
 
-def _summary_table(styles, result: UnifiedInvestigationResult) -> Table:
+def _summary_table(styles, result: InvestigationResult) -> Table:
     sc = _sev_color(result.severity)
     sev_style = ParagraphStyle("_Sev", parent=styles["GT_Value"], textColor=sc, fontName="Helvetica-Bold")
     rows = [
@@ -172,7 +172,7 @@ def _recs_section(story, styles, recs: list):
         story.append(Paragraph(f"<b>•</b> {rec}", styles["GT_Body"]))
 
 
-def create_unified_pdf_report(result: UnifiedInvestigationResult) -> BytesIO:
+def create_unified_pdf_report(result: InvestigationResult) -> BytesIO:
     """Single unified report builder for all scan types (file, url, log)."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(
@@ -265,16 +265,16 @@ def create_unified_pdf_report(result: UnifiedInvestigationResult) -> BytesIO:
 
 # ── Backwards-compatible shims ─────────────────────────────────────────────
 
-def create_pdf_report(analysis: UnifiedInvestigationResult) -> BytesIO:
+def create_pdf_report(analysis: InvestigationResult) -> BytesIO:
     """File scan report — delegates to unified builder."""
     return create_unified_pdf_report(analysis)
 
 
 def create_url_pdf_report(analysis) -> BytesIO:
-    """URL scan report — accepts UnifiedInvestigationResult OR legacy dict."""
+    """URL scan report — accepts InvestigationResult OR legacy dict."""
     if isinstance(analysis, dict):
-        # Convert legacy dict to UnifiedInvestigationResult
-        from app.schemas import UnifiedInvestigationResult as UIR
+        # Convert legacy dict to InvestigationResult
+        from app.schemas import InvestigationResult as UIR
         iocs = analysis.get("iocs", [])
         if isinstance(iocs, dict):
             flat = []
@@ -307,9 +307,9 @@ def create_url_pdf_report(analysis) -> BytesIO:
 
 
 def create_log_pdf_report(log_analysis) -> BytesIO:
-    """Log analysis report — accepts UnifiedInvestigationResult OR legacy dict."""
+    """Log analysis report — accepts InvestigationResult OR legacy dict."""
     if isinstance(log_analysis, dict):
-        from app.schemas import UnifiedInvestigationResult as UIR
+        from app.schemas import InvestigationResult as UIR
         iocs = log_analysis.get("iocs", {})
         flat_iocs = []
         if isinstance(iocs, dict):

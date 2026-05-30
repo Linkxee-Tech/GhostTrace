@@ -21,7 +21,8 @@ from app.database.repositories import (
     save_alert,
     get_alerts,
 )
-from app.schemas import UrlAnalysisRequest, LogAnalysisRequest, MonitorAddRequest, ApiKeysUpdateRequest, UnifiedInvestigationResult
+from app.schemas import UrlAnalysisRequest, LogAnalysisRequest, MonitorAddRequest, ApiKeysUpdateRequest, InvestigationResult
+from app.pipeline.engine import run_investigation
 from datetime import datetime
 from app.security import require_api_key, enforce_rate_limit
 from app.api.websockets import manager
@@ -49,22 +50,24 @@ def _preview_unified_result(
     target: str | None = None,
     result_summary: str | None = None,
     created_at: str | None = None,
-) -> UnifiedInvestigationResult:
+) -> InvestigationResult:
     r_type = str(report_type or "report").lower()
     r_target = str(target or name or "GhostTrace Report")
     r_severity = str(severity or "medium").lower()
     r_summary = str(result_summary or "Summary details exported from report archive.")
     r_meta = str(created_at or datetime.utcnow().isoformat() + "Z")
-    return UnifiedInvestigationResult(
-        target=r_target,
-        type=r_type if r_type in {"file", "url", "log"} else "report",
+    return InvestigationResult(
+        scan_id="preview",
+        target_type=r_type if r_type in {"file", "url", "log"} else "report",
+        target_value=r_target,
         risk_score=0,
         severity=r_severity if r_severity in {"low", "medium", "high", "critical", "clean"} else "medium",
-        confidence=50,
+        summary=r_summary,
+        confidence=50.0,
         iocs=[],
         timeline=[{"stage": "Record Snapshot", "details": f"Archive metadata captured at {r_meta}", "sev": "low"}],
         ai_explanation=f"Archive Summary: {r_summary}",
-        recommendations=["Run a fresh scan to generate a full evidence-backed forensic report."],
+        recommendation="Run a fresh scan to generate a full evidence-backed forensic report.",
     )
 
 
@@ -133,14 +136,20 @@ async def analyze_file_endpoint(request: Request, background_tasks: BackgroundTa
     if not file.filename:
         raise HTTPException(status_code=400, detail="A valid file must be uploaded.")
 
-    result = await analyze_file(file)
+    case = {
+        "target_type": "file",
+        "target_value": file.filename,
+        "content": await file.read()
+    }
+    result_dict = run_investigation(case)
+    result = InvestigationResult(**result_dict)
 
     # Synchronous DB writes — must complete before response so history refresh works
     safe_insert(
         "file_scans",
         {
             "scan_type": "file",
-            "target": result.target,
+            "target": result.target_value,
             "severity": result.severity,
             "risk_score": result.risk_score,
             "result": result.model_dump(),
@@ -152,9 +161,9 @@ async def analyze_file_endpoint(request: Request, background_tasks: BackgroundTa
         {
             "report_type": "file",
             "filename": file.filename,
-            "target": result.target,
+            "target": result.target_value,
             "severity": result.severity,
-            "result_summary": (result.ai_explanation or "")[:500],
+            "result_summary": (result.summary or "")[:500],
             "result": result.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
@@ -164,7 +173,7 @@ async def analyze_file_endpoint(request: Request, background_tasks: BackgroundTa
     async def _broadcast():
         await manager.broadcast({
             "event": "new_threat", "type": "file",
-            "target": result.target, "severity": result.severity,
+            "target": result.target_value, "severity": result.severity,
             "message": "File analysis completed."
         })
     background_tasks.add_task(_broadcast)
@@ -177,15 +186,21 @@ async def generate_report_endpoint(request: Request, file: UploadFile = File(...
     if not file.filename:
         raise HTTPException(status_code=400, detail="A valid file must be uploaded.")
 
-    analysis = await analyze_file(file)
+    case = {
+        "target_type": "file",
+        "target_value": file.filename,
+        "content": await file.read()
+    }
+    result_dict = run_investigation(case)
+    analysis = InvestigationResult(**result_dict)
     safe_insert(
         "reports",
         {
             "report_type": "file",
             "filename": file.filename,
-            "target": analysis.target,
+            "target": analysis.target_value,
             "severity": analysis.severity,
-            "result_summary": (analysis.ai_explanation or "")[:500],
+            "result_summary": (analysis.summary or "")[:500],
             "result": analysis.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
@@ -202,14 +217,20 @@ def analyze_url_endpoint(request: Request, background_tasks: BackgroundTasks, pa
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
     try:
-        result = analyze_url(payload.url)
+        case = {
+            "target_type": "url",
+            "target_value": payload.url,
+            "url": payload.url
+        }
+        result_dict = run_investigation(case)
+        result = InvestigationResult(**result_dict)
 
         # Synchronous DB writes — must complete before response so history refresh works
         safe_insert(
             "url_scans",
             {
                 "scan_type": "url",
-                "target": result.target,
+                "target": result.target_value,
                 "severity": result.severity,
                 "risk_score": result.risk_score,
                 "result": result.model_dump(),
@@ -221,9 +242,9 @@ def analyze_url_endpoint(request: Request, background_tasks: BackgroundTasks, pa
             {
                 "report_type": "url",
                 "url": payload.url,
-                "target": result.target,
+                "target": result.target_value,
                 "severity": result.severity,
-                "result_summary": (result.ai_explanation or "")[:500],
+                "result_summary": (result.summary or "")[:500],
                 "result": result.model_dump(),
                 "created_at": datetime.utcnow().isoformat() + "Z",
             },
@@ -232,7 +253,7 @@ def analyze_url_endpoint(request: Request, background_tasks: BackgroundTasks, pa
         async def _broadcast():
             await manager.broadcast({
                 "event": "new_threat", "type": "url",
-                "target": result.target, "severity": result.severity,
+                "target": result.target_value, "severity": result.severity,
                 "message": "URL analysis completed."
             })
         background_tasks.add_task(_broadcast)
@@ -245,15 +266,21 @@ def analyze_url_endpoint(request: Request, background_tasks: BackgroundTasks, pa
 def generate_url_report_endpoint(request: Request, payload: UrlAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
-    result = analyze_url(payload.url)
+    case = {
+        "target_type": "url",
+        "target_value": payload.url,
+        "url": payload.url
+    }
+    result_dict = run_investigation(case)
+    result = InvestigationResult(**result_dict)
     safe_insert(
         "reports",
         {
             "report_type": "url",
             "url": payload.url,
-            "target": result.target,
+            "target": result.target_value,
             "severity": result.severity,
-            "result_summary": (result.ai_explanation or "")[:500],
+            "result_summary": (result.summary or "")[:500],
             "result": result.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
@@ -267,14 +294,20 @@ def generate_url_report_endpoint(request: Request, payload: UrlAnalysisRequest, 
 def generate_log_report_endpoint(request: Request, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
-    result = analyze_log_text(payload.log_text)
+    case = {
+        "target_type": "log",
+        "target_value": "Log Snippet",
+        "content": payload.log_text
+    }
+    result_dict = run_investigation(case)
+    result = InvestigationResult(**result_dict)
     safe_insert(
         "reports",
         {
             "report_type": "log",
-            "target": result.target,
+            "target": result.target_value,
             "severity": result.severity,
-            "result_summary": (result.ai_explanation or "")[:500],
+            "result_summary": (result.summary or "")[:500],
             "result": result.model_dump(),
             "created_at": datetime.utcnow().isoformat() + "Z",
         },
@@ -288,14 +321,20 @@ def generate_log_report_endpoint(request: Request, payload: LogAnalysisRequest, 
 def analyze_log_endpoint(request: Request, background_tasks: BackgroundTasks, payload: LogAnalysisRequest, _: None = Depends(require_api_key)):
     enforce_rate_limit(request.client.host if request.client else "unknown")
     _hydrate_runtime_keys_from_latest_settings()
-    result = analyze_log_text(payload.log_text)
+    case = {
+        "target_type": "log",
+        "target_value": "Log Snippet",
+        "content": payload.log_text
+    }
+    result_dict = run_investigation(case)
+    result = InvestigationResult(**result_dict)
 
     # Synchronous DB writes — must complete before response so history refresh works
     safe_insert(
         "log_scans",
         {
             "scan_type": "log",
-            "target": result.target,
+            "target": result.target_value,
             "severity": result.severity,
             "risk_score": result.risk_score,
             "result": result.model_dump(),
@@ -317,7 +356,7 @@ def analyze_log_endpoint(request: Request, background_tasks: BackgroundTasks, pa
     async def _broadcast():
         await manager.broadcast({
             "event": "new_threat", "type": "log",
-            "target": result.target, "severity": result.severity,
+            "target": result.target_value, "severity": result.severity,
             "message": "Log analysis completed."
         })
     background_tasks.add_task(_broadcast)
@@ -481,7 +520,7 @@ async def report_pdf_by_id_endpoint(report_id: str, _: None = Depends(require_ap
     stored_result = report.get("result")
     if isinstance(stored_result, dict):
         try:
-            unified = UnifiedInvestigationResult(**stored_result)
+            unified = InvestigationResult(**stored_result)
             pdf_stream = create_pdf_report(unified)
             headers = {
                 "Content-Disposition": f"attachment; filename=ghosttrace_report_{report_id}.pdf"

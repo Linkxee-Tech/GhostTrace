@@ -63,17 +63,32 @@ class ApiKeysUpdateRequest(BaseModel):
     phishtank_api_key: str | None = None
 
 
-class UnifiedInvestigationResult(BaseModel):
-    target: str
-    type: str  # 'file', 'url', or 'log'
+class InvestigationResult(BaseModel):
+    scan_id: str
+    target_type: str  # 'file', 'memory', 'disk', 'log', 'endpoint', 'url'
+    target_value: str
     risk_score: int
     severity: str  # 'low', 'medium', 'high', 'critical'
-    confidence: int
-    iocs: list[dict[str, str]]
-    timeline: list[dict[str, Any]]
-    ai_explanation: str
-    recommendations: list[str]
-    health_breakdown: dict[str, int] | None = None
-    mitre_mapping: list[dict[str, str]] | None = None
-    raw_artifacts: dict[str, Any] | None = None
-    evidence: list[str] | None = None
+    summary: str
+    iocs: list[dict[str, Any]] = []
+    timeline: list[dict[str, Any]] = []
+    evidence: list[dict[str, Any]] = []
+    ai_explanation: str = ""
+    recommendation: str = ""
+    confidence: float = 0.0
+    metadata: dict[str, Any] = {}
+    execution_log: list[dict[str, Any]] = []
+
+class ToolExecutionRequest(BaseModel):
+    tool_name: str
+    tool_args: dict[str, Any]
+
+class AgentState(BaseModel):
+    scan_id: str
+    target_type: str
+    target_value: str
+    plan: list[ToolExecutionRequest] = []
+    evidence_collected: dict[str, Any] = {}
+    execution_log: list[dict[str, Any]] = []
+    validation_status: str = "pending"
+

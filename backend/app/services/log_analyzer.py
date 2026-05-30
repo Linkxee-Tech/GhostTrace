@@ -6,7 +6,7 @@ from urllib.error import URLError
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 
-from app.schemas import UnifiedInvestigationResult
+from app.schemas import InvestigationResult
 from app.services.llm_fallback import generate_with_fallback
 
 
@@ -96,7 +96,7 @@ def _generate_log_ai_explanation(text: str, behavior_patterns: list[str], risk_s
     return "AI explanation service could not be reached. Deterministic behavioral findings are provided."
 
 
-def analyze_log_text(log_text: str) -> UnifiedInvestigationResult:
+def analyze_log_text(log_text: str) -> InvestigationResult:
     text = log_text.strip()
     ip_matches = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
     domain_matches = re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,63}\b", text)
@@ -180,7 +180,7 @@ def analyze_log_text(log_text: str) -> UnifiedInvestigationResult:
         )
     timeline.append({"stage": "AI Analysis", "details": "Generated attack reconstruction from log events.", "sev": "low"})
 
-    return UnifiedInvestigationResult(
+    return InvestigationResult(
         target="System Logs",
         type="log",
         risk_score=risk_score,
